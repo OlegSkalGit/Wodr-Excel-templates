@@ -91,6 +91,151 @@ def resolve_path(base_dir, path):
     if os.path.exists(cand4): return cand4
     return cand1
 
+def load_excel_config(filepath):
+    """Loads all worksheets from Excel config safely parsing metadata (A1 and A2)."""
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"Файл не знайдено: {filepath}")
+    
+    wb = openpyxl.load_workbook(filepath, data_only=True)
+    sheets_data = {}
+    
+    for sheet_name in wb.sheetnames:
+        sheet = wb[sheet_name]
+        
+        # Template is in Cell A1
+        template_path = sheet.cell(row=1, column=1).value
+        # Output file name pattern is in Cell A2
+        name_pattern = sheet.cell(row=2, column=1).value
+        
+        if template_path is not None:
+            template_path = str(template_path).strip()
+        else:
+            template_path = ""
+            
+        if name_pattern is not None:
+            name_pattern = str(name_pattern).strip()
+        else:
+            name_pattern = ""
+            
+        # Headers are located on Row 4
+        headers = []
+        for col in range(1, sheet.max_column + 1):
+            val = sheet.cell(row=4, column=col).value
+            if val is not None:
+                header_name = str(val).strip()
+                if header_name.startswith("{{") and header_name.endswith("}}"):
+                    header_name = header_name[2:-2].strip()
+                headers.append(header_name)
+            else:
+                headers.append("")
+        
+        # Remove trailing empty headers
+        while headers and headers[-1] == "":
+            headers.pop()
+            
+        if not headers:
+            continue
+            
+        # Data rows start from Row 5
+        rows = []
+        for r in range(5, sheet.max_row + 1):
+            row_vals = {}
+            has_value = False
+            for col_idx, h in enumerate(headers):
+                cell = sheet.cell(row=r, column=col_idx + 1)
+                cell_val = cell.value
+                if cell_val is not None:
+                    has_value = True
+                row_vals[h] = str(cell_val) if cell_val is not None else ""
+                row_vals[f"{h}_type_code"] = cell.data_type
+            if has_value:
+                rows.append(row_vals)
+                
+        sheets_data[sheet_name] = {
+            "template_path": template_path,
+            "name_pattern": name_pattern,
+            "headers": headers,
+            "rows": rows
+        }
+    return sheets_data
+
+def save_excel_config(filepath, sheet_name, template_path, name_pattern, headers, df_data):
+    """Saves changes back to Excel config safely preserving other sheets."""
+    config_dir = os.path.dirname(os.path.abspath(filepath))
+    try:
+        target_abs = os.path.abspath(template_path)
+        if os.path.splitdrive(target_abs)[0].lower() == os.path.splitdrive(config_dir)[0].lower():
+            template_path = os.path.relpath(target_abs, config_dir).replace('\\', '/')
+    except Exception:
+        pass
+
+    wb = openpyxl.load_workbook(filepath)
+    if sheet_name not in wb.sheetnames:
+        raise ValueError(f"Аркуш '{sheet_name}' не знайдено у файлі конфігурації.")
+        
+    sheet = wb[sheet_name]
+    
+    # 1. Update metadata in A1 and A2
+    sheet.cell(row=1, column=1).value = template_path
+    sheet.cell(row=2, column=1).value = name_pattern
+    
+    # 2. Update headers in Row 4
+    for col_idx, h in enumerate(headers):
+        sheet.cell(row=4, column=col_idx + 1).value = h
+        
+    # 3. Clear old data rows from Row 5 onwards
+    max_r = max(sheet.max_row, 5)
+    for r in range(5, max_r + 1):
+        for c in range(1, len(headers) + 1):
+            sheet.cell(row=r, column=c).value = None
+            
+    # 4. Write new data rows
+    for r_idx, row_dict in enumerate(df_data):
+        for c_idx, h in enumerate(headers):
+            val = row_dict.get(h, "")
+            cell = sheet.cell(row=5 + r_idx, column=c_idx + 1)
+            
+            type_code = row_dict.get(f"{h}_type_code", "s")
+            
+            if isinstance(val, str):
+                val_strip = val.strip()
+                if type_code == "n":
+                    try:
+                        if "." in val_strip or "e" in val_strip.lower():
+                            cell.value = float(val_strip)
+                        else:
+                            cell.value = int(val_strip)
+                    except ValueError:
+                        cell.value = val
+                elif type_code == "b":
+                    if val_strip.lower() in ["true", "1", "yes"]:
+                        cell.value = True
+                    elif val_strip.lower() in ["false", "0", "no"]:
+                        cell.value = False
+                    else:
+                        cell.value = val
+                elif type_code == "d":
+                    try:
+                        cell.value = datetime.fromisoformat(val_strip)
+                    except ValueError:
+                        cell.value = val
+                else:
+                    if val_strip.isdigit():
+                        cell.value = int(val_strip)
+                    elif re.match(r'^\d+\.\d+$', val_strip):
+                        cell.value = float(val_strip)
+                    else:
+                        cell.value = val
+            else:
+                cell.value = val
+                
+            # Enable multiline wrapping if newlines are present
+            if isinstance(cell.value, str) and '\n' in cell.value:
+                cell.alignment = Alignment(wrapText=True)
+                
+    wb.save(filepath)
+    return True
+
 # ==========================================
 # ЧАСТИНА 1: СТВОРЕННЯ ШАБЛОНІВ
 # ==========================================
@@ -778,102 +923,112 @@ def process_excel(template_path, output_path, variables):
 
 def run_generation(excel_file, sheet_selector="all", row_selector="all", custom_out_dir=None):
     excel_dir = os.path.dirname(os.path.abspath(excel_file))
-    try: wb = openpyxl.load_workbook(excel_file, data_only=True)
+    try:
+        sheets_data = load_excel_config(excel_file)
     except Exception as e:
         print(f"Помилка при відкритті Excel: {e}")
         return
+        
     now_vars = get_now_vars()
-    for k in list(now_vars.keys()): now_vars[f"{k}_type"] = "s"
+    for k in list(now_vars.keys()): 
+        now_vars[f"{k}_type"] = "s"
+        
     TYPE_MAP = {'s': 'string', 'n': 'number', 'd': 'date', 'b': 'boolean', 'f': 'formula', 'e': 'error'}
+    
     sheets_to_process = []
-    if sheet_selector.lower() == "all": sheets_to_process = wb.worksheets
+    available_sheets = list(sheets_data.keys())
+    
+    if sheet_selector.lower() == "all":
+        sheets_to_process = available_sheets
     else:
         try:
             idx = int(sheet_selector) - 1
-            if 0 <= idx < len(wb.worksheets): sheets_to_process = [wb.worksheets[idx]]
-        except ValueError: pass
+            if 0 <= idx < len(available_sheets):
+                sheets_to_process = [available_sheets[idx]]
+        except ValueError:
+            pass
         if not sheets_to_process:
-            if sheet_selector in wb.sheetnames:
-                sheets_to_process = [wb[sheet_selector]]
+            if sheet_selector in sheets_data:
+                sheets_to_process = [sheet_selector]
         if not sheets_to_process:
             sel_clean = sheet_selector.strip().lower()
-            for s in wb.worksheets:
-                if s.title.strip().lower() == sel_clean:
-                    sheets_to_process = [s]
+            for name in available_sheets:
+                if name.strip().lower() == sel_clean:
+                    sheets_to_process = [name]
                     break
+                    
     if not sheets_to_process:
         print(f"Аркуш '{sheet_selector}' не знайдено.")
         return
 
-    for sheet in sheets_to_process:
-        print(f"Обробка аркуша: {sheet.title}")
-        template_rel_path = sheet.cell(row=1, column=1).value
+    for sheet_name in sheets_to_process:
+        print(f"Обробка аркуша: {sheet_name}")
+        sheet_info = sheets_data[sheet_name]
+        
+        template_rel_path = sheet_info["template_path"]
         if not template_rel_path:
             print(f"  Пропуск: Не вказано шаблон у комірці A1.")
             continue
-        template_path = resolve_path(excel_dir, str(template_rel_path))
+            
+        template_path = resolve_path(excel_dir, template_rel_path)
         if not os.path.exists(template_path):
             print(f"  Помилка: Шаблон не знайдено: {template_path}")
             continue
-        output_pattern = sheet.cell(row=2, column=1).value
+            
+        output_pattern = sheet_info["name_pattern"]
         if not output_pattern:
             print(f"  Пропуск: Не вказано шлях результату в A2.")
             continue
-        headers = []
-        for col in range(1, sheet.max_column + 1):
-            val = sheet.cell(row=4, column=col).value
-            if val is not None:
-                header_name = str(val).strip()
-                if header_name.startswith("{{") and header_name.endswith("}}"): header_name = header_name[2:-2].strip()
-                headers.append(header_name)
-            else: headers.append(None)
-        while headers and headers[-1] is None: headers.pop()
-        if not any(h is not None for h in headers):
-            print(f"  Пропуск: Не знайдено заголовків у рядку 4.")
-            continue
-        print(f"  Знайдені змінні: {', '.join([h for h in headers if h is not None])}")
+            
+        headers = sheet_info["headers"]
+        print(f"  Знайдені змінні: {', '.join([h for h in headers if h])}")
+        
+        rows = sheet_info["rows"]
         data_rows = []
-        max_row = sheet.max_row
+        
         if row_selector.lower() == "all":
-            for r in range(5, max_row + 1):
-                row_vals = []
-                for c in range(1, len(headers) + 1):
-                    cell = sheet.cell(row=r, column=c)
-                    row_vals.append((cell.value, cell.data_type))
-                if any(v[0] is not None for v in row_vals): data_rows.append((r, row_vals))
+            for idx, r_dict in enumerate(rows):
+                data_rows.append((5 + idx, r_dict))
         else:
             try:
                 r_idx = int(row_selector)
-                if 5 <= r_idx <= max_row:
-                    row_vals = []
-                    for c in range(1, len(headers) + 1):
-                        cell = sheet.cell(row=r_idx, column=c)
-                        row_vals.append((cell.value, cell.data_type))
-                    if any(v[0] is not None for v in row_vals): data_rows.append((r_idx, row_vals))
-            except ValueError: print(f"  Невірний формат номера рядка: {row_selector}")
-
-        for r_num, row_vals in data_rows:
+                list_idx = r_idx - 5
+                if 0 <= list_idx < len(rows):
+                    data_rows.append((r_idx, rows[list_idx]))
+                else:
+                    print(f"  Рядок {r_idx} поза межами діапазону даних.")
+            except ValueError:
+                print(f"  Невірний формат номера рядка: {row_selector}")
+                
+        for r_num, row_dict in data_rows:
             variables = {**now_vars}
-            for i, h in enumerate(headers):
-                if h is None: continue
-                val, v_type = row_vals[i] if i < len(row_vals) else (None, "s")
-                if val is None: val = ""
+            for h in headers:
+                if not h:
+                    continue
+                val = row_dict.get(h, "")
+                v_type = row_dict.get(f"{h}_type_code", "s")
                 variables[h] = val
                 variables[f"{h}_type"] = TYPE_MAP.get(v_type, v_type)
                 variables[f"{h}_type_code"] = v_type
+                
             rendered_out_path = render_string_template(str(output_pattern), variables)
             ext = os.path.splitext(template_path)[1].lower()
-            if not rendered_out_path.lower().endswith(ext): rendered_out_path += ext
+            if not rendered_out_path.lower().endswith(ext):
+                rendered_out_path += ext
             rendered_out_path = rendered_out_path.replace('/', os.sep).replace('\\', os.sep)
             if custom_out_dir:
                 final_output_path = resolve_path(custom_out_dir, rendered_out_path)
             else:
                 final_output_path = resolve_path(excel_dir, rendered_out_path)
             final_output_path = get_unique_path(final_output_path)
+            
             print(f"  Рядок {r_num}:")
-            if ext == '.docx': process_word(template_path, final_output_path, variables)
-            elif ext == '.xlsx': process_excel(template_path, final_output_path, variables)
-            else: print(f"  [Помилка] Непідтримуваний формат шаблону: {ext}")
+            if ext == '.docx':
+                process_word(template_path, final_output_path, variables)
+            elif ext == '.xlsx':
+                process_excel(template_path, final_output_path, variables)
+            else:
+                print(f"  [Помилка] Непідтримуваний формат шаблону: {ext}")
 
 # ==========================================
 # ГОЛОВНИЙ РОУТЕР

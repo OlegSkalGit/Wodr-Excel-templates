@@ -501,17 +501,9 @@ def save_generated_document_dialog(template_path, variables, config_path):
     from _templates_machine_ import process_word, process_excel
     import tempfile
     
+    from _templates_machine_ import resolve_path
     cfg_dir = os.path.dirname(os.path.abspath(config_path))
-    actual_t_path = template_path
-    if not os.path.isabs(template_path):
-        cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
-        cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
-        cand3 = os.path.abspath(template_path)
-        cand4 = os.path.abspath(os.path.basename(template_path))
-        if os.path.exists(cand1): actual_t_path = cand1
-        elif os.path.exists(cand2): actual_t_path = cand2
-        elif os.path.exists(cand3): actual_t_path = cand3
-        elif os.path.exists(cand4): actual_t_path = cand4
+    actual_t_path = resolve_path(cfg_dir, template_path)
         
     if not os.path.exists(actual_t_path):
         st.error(f"Шаблон не знайдено: {template_path}")
@@ -618,135 +610,19 @@ def get_cached_config(config_path):
     return data
 
 def load_excel_config(filepath):
-    """Loads all data sheets from an Excel config safely."""
+    """Loads all worksheets from Excel config safely parsing metadata (A1 and A2), imported from core."""
+    from _templates_machine_ import load_excel_config as core_load
     try:
-        wb = openpyxl.load_workbook(filepath, data_only=True)
-        sheets_data = {}
-        for sheet_name in wb.sheetnames:
-            sheet = wb[sheet_name]
-            template_path = sheet.cell(row=1, column=1).value or ""
-            name_pattern = sheet.cell(row=2, column=1).value or ""
-            
-            # Headers are located on Row 4
-            headers = []
-            for col in range(1, sheet.max_column + 1):
-                val = sheet.cell(row=4, column=col).value
-                headers.append(str(val) if val is not None else "")
-            
-            # Remove trailing empty headers
-            while headers and headers[-1] == "":
-                headers.pop()
-                
-            if not headers:
-                continue
-                
-            # Data rows start from Row 5
-            rows = []
-            for r in range(5, sheet.max_row + 1):
-                row_vals = {}
-                has_value = False
-                for col_idx, h in enumerate(headers):
-                    cell = sheet.cell(row=r, column=col_idx + 1)
-                    cell_val = cell.value
-                    if cell_val is not None:
-                        has_value = True
-                    row_vals[h] = str(cell_val) if cell_val is not None else ""
-                    row_vals[f"{h}_type_code"] = cell.data_type
-                if has_value:
-                    rows.append(row_vals)
-                    
-            sheets_data[sheet_name] = {
-                "template_path": template_path,
-                "name_pattern": name_pattern,
-                "headers": headers,
-                "rows": rows
-            }
-        return sheets_data
+        return core_load(filepath)
     except Exception as e:
         st.error(f"Помилка при завантаженні конфігу {filepath}: {e}")
         return None
 
 def save_excel_config(filepath, sheet_name, template_path, name_pattern, headers, df_data):
-    """Saves changes back to Excel config safely preserving other sheets."""
+    """Saves changes back to Excel config safely preserving other sheets, imported from core."""
+    from _templates_machine_ import save_excel_config as core_save
     try:
-        # Convert template path to relative path if possible
-        config_dir = os.path.dirname(os.path.abspath(filepath))
-        try:
-            target_abs = os.path.abspath(template_path)
-            if os.path.splitdrive(target_abs)[0].lower() == os.path.splitdrive(config_dir)[0].lower():
-                template_path = os.path.relpath(target_abs, config_dir).replace('\\', '/')
-        except Exception:
-            pass
-
-        # Load the workbook preserving formula structures (don't use data_only=True)
-        wb = openpyxl.load_workbook(filepath)
-        if sheet_name not in wb.sheetnames:
-            return False
-            
-        sheet = wb[sheet_name]
-        
-        # 1. Update metadata in A1 and A2
-        sheet.cell(row=1, column=1).value = template_path
-        sheet.cell(row=2, column=1).value = name_pattern
-        
-        # 2. Update headers in Row 4
-        for col_idx, h in enumerate(headers):
-            sheet.cell(row=4, column=col_idx + 1).value = h
-            
-        # 3. Clear old data rows from Row 5 onwards
-        max_r = max(sheet.max_row, 5)
-        for r in range(5, max_r + 1):
-            for c in range(1, len(headers) + 1):
-                sheet.cell(row=r, column=c).value = None
-                
-        # 4. Write new data rows
-        for r_idx, row_dict in enumerate(df_data):
-            for c_idx, h in enumerate(headers):
-                val = row_dict.get(h, "")
-                cell = sheet.cell(row=5 + r_idx, column=c_idx + 1)
-                
-                type_code = row_dict.get(f"{h}_type_code", "s")
-                
-                if isinstance(val, str):
-                    val_strip = val.strip()
-                    if type_code == "n":
-                        try:
-                            if "." in val_strip or "e" in val_strip.lower():
-                                cell.value = float(val_strip)
-                            else:
-                                cell.value = int(val_strip)
-                        except ValueError:
-                            cell.value = val
-                    elif type_code == "b":
-                        if val_strip.lower() in ["true", "1", "yes"]:
-                            cell.value = True
-                        elif val_strip.lower() in ["false", "0", "no"]:
-                            cell.value = False
-                        else:
-                            cell.value = val
-                    elif type_code == "d":
-                        try:
-                            from datetime import datetime
-                            cell.value = datetime.fromisoformat(val_strip)
-                        except ValueError:
-                            cell.value = val
-                    else:
-                        if val_strip.isdigit():
-                            cell.value = int(val_strip)
-                        elif re.match(r'^\d+\.\d+$', val_strip):
-                            cell.value = float(val_strip)
-                        else:
-                            cell.value = val
-                else:
-                    cell.value = val
-                    
-                # Enable multiline wrapping if newlines are present
-                if isinstance(cell.value, str) and '\n' in cell.value:
-                    from openpyxl.styles import Alignment
-                    cell.alignment = Alignment(wrapText=True)
-                    
-        wb.save(filepath)
-        return True
+        return core_save(filepath, sheet_name, template_path, name_pattern, headers, df_data)
     except Exception as e:
         st.error(f"Помилка при збереженні змін: {e}")
         return False
@@ -1009,24 +885,10 @@ def generate_docx_preview(template_path, variables, config_path=None):
     from _templates_machine_ import process_word
     
     # Resolve relative template paths relative to the current Excel config directory if needed
-    actual_path = template_path
+    from _templates_machine_ import resolve_path
     c_path = config_path or st.session_state.get("editor_config_path")
-    if not os.path.isabs(template_path) and c_path:
-        cfg_dir = os.path.dirname(os.path.abspath(c_path))
-        cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
-        cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
-        cand3 = os.path.abspath(template_path)
-        cand4 = os.path.abspath(os.path.basename(template_path))
-        if os.path.exists(cand1):
-            actual_path = cand1
-        elif os.path.exists(cand2):
-            actual_path = cand2
-        elif os.path.exists(cand3):
-            actual_path = cand3
-        elif os.path.exists(cand4):
-            actual_path = cand4
-        else:
-            actual_path = cand1
+    cfg_dir = os.path.dirname(os.path.abspath(c_path)) if c_path else os.getcwd()
+    actual_path = resolve_path(cfg_dir, template_path)
             
     if not os.path.exists(actual_path):
         return f"<div style='color: red; font-weight: bold;'>Шаблон не знайдено за шляхом: {template_path}</div>"
@@ -1201,24 +1063,10 @@ def generate_xlsx_preview(template_path, variables, config_path=None):
     import html as py_html
     
     # Resolve relative template paths relative to the current Excel config directory if needed
-    actual_path = template_path
+    from _templates_machine_ import resolve_path
     c_path = config_path or st.session_state.get("editor_config_path")
-    if not os.path.isabs(template_path) and c_path:
-        cfg_dir = os.path.dirname(os.path.abspath(c_path))
-        cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
-        cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
-        cand3 = os.path.abspath(template_path)
-        cand4 = os.path.abspath(os.path.basename(template_path))
-        if os.path.exists(cand1):
-            actual_path = cand1
-        elif os.path.exists(cand2):
-            actual_path = cand2
-        elif os.path.exists(cand3):
-            actual_path = cand3
-        elif os.path.exists(cand4):
-            actual_path = cand4
-        else:
-            actual_path = cand1
+    cfg_dir = os.path.dirname(os.path.abspath(c_path)) if c_path else os.getcwd()
+    actual_path = resolve_path(cfg_dir, template_path)
             
     if not os.path.exists(actual_path):
         return f"<div style='color: red; font-weight: bold;'>Шаблон не знайдено за шляхом: {template_path}</div>"
@@ -1660,17 +1508,9 @@ if selected_view == "Менеджер Проектів":
                         with btn_col2:
                             if st.button("📄 Зберегти документ", use_container_width=True):
                                 # Resolve absolute template path
+                                from _templates_machine_ import resolve_path
                                 cfg_dir = os.path.dirname(os.path.abspath(config_path))
-                                actual_t_path = template_path
-                                if not os.path.isabs(template_path):
-                                    cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
-                                    cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
-                                    cand3 = os.path.abspath(template_path)
-                                    cand4 = os.path.abspath(os.path.basename(template_path))
-                                    if os.path.exists(cand1): actual_t_path = cand1
-                                    elif os.path.exists(cand2): actual_t_path = cand2
-                                    elif os.path.exists(cand3): actual_t_path = cand3
-                                    elif os.path.exists(cand4): actual_t_path = cand4
+                                actual_t_path = resolve_path(cfg_dir, template_path)
                                     
                                 save_generated_document_dialog(actual_t_path, edited_vars, config_path)
                                 
@@ -1689,17 +1529,9 @@ if selected_view == "Менеджер Проектів":
                         st.markdown("##### 🔍 Попередній перегляд документа")
                         
                         # Resolve relative template path
+                        from _templates_machine_ import resolve_path
                         cfg_dir = os.path.dirname(os.path.abspath(config_path))
-                        actual_template_path = template_path
-                        if not os.path.isabs(template_path):
-                            cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
-                            cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
-                            cand3 = os.path.abspath(template_path)
-                            cand4 = os.path.abspath(os.path.basename(template_path))
-                            if os.path.exists(cand1): actual_template_path = cand1
-                            elif os.path.exists(cand2): actual_template_path = cand2
-                            elif os.path.exists(cand3): actual_template_path = cand3
-                            elif os.path.exists(cand4): actual_template_path = cand4
+                        actual_template_path = resolve_path(cfg_dir, template_path)
                             
                         if not os.path.exists(actual_template_path):
                             st.warning(f"Шаблон не знайдено за шляхом: {template_path} (враховуючи відносність до конфігу)")
@@ -2245,17 +2077,9 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                     if pending_renames:
                         t_path = st.session_state.get("editor_template_path", "")
                         if t_path:
+                            from _templates_machine_ import resolve_path
                             cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
-                            actual_t_path = t_path
-                            if not os.path.isabs(t_path):
-                                cand1 = os.path.abspath(os.path.join(cfg_dir, t_path))
-                                cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(t_path)))
-                                cand3 = os.path.abspath(t_path)
-                                cand4 = os.path.abspath(os.path.basename(t_path))
-                                if os.path.exists(cand1): actual_t_path = cand1
-                                elif os.path.exists(cand2): actual_t_path = cand2
-                                elif os.path.exists(cand3): actual_t_path = cand3
-                                elif os.path.exists(cand4): actual_t_path = cand4
+                            actual_t_path = resolve_path(cfg_dir, t_path)
                             
                             if os.path.exists(actual_t_path):
                                 renamed_count = 0
@@ -2295,23 +2119,9 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                     
                 t_path = st.session_state["editor_template_path"]
                 if t_path:
+                    from _templates_machine_ import resolve_path
                     cfg_dir = os.path.dirname(os.path.abspath(cfg_path))
-                    actual_template_path = t_path
-                    if not os.path.isabs(t_path):
-                        cand1 = os.path.abspath(os.path.join(cfg_dir, t_path))
-                        cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(t_path)))
-                        cand3 = os.path.abspath(t_path)
-                        cand4 = os.path.abspath(os.path.basename(t_path))
-                        if os.path.exists(cand1):
-                            actual_template_path = cand1
-                        elif os.path.exists(cand2):
-                            actual_template_path = cand2
-                        elif os.path.exists(cand3):
-                            actual_template_path = cand3
-                        elif os.path.exists(cand4):
-                            actual_template_path = cand4
-                        else:
-                            actual_template_path = cand1
+                    actual_template_path = resolve_path(cfg_dir, t_path)
                             
                     ext = os.path.splitext(t_path)[1].lower()
                     
