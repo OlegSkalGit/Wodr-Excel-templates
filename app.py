@@ -17,29 +17,89 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
 
 # Configure page layout and style
+# Initialize session state variables
+if "theme" not in st.session_state:
+    st.session_state["theme"] = "light"
+
+theme = st.session_state["theme"]
+
+if theme == "dark":
+    bg_color = "#0f172a"
+    text_color = "#f8fafc"
+    card_bg = "rgba(30, 41, 59, 0.7)"
+    card_border = "rgba(51, 65, 85, 0.8)"
+    subtitle_color = "#94a3b8"
+    input_border = "#334155"
+    shadow_color = "rgba(0, 0, 0, 0.3)"
+    popover_bg = "#1e293b"
+    placeholder_color = "#94a3b8"
+    alert_bg = "#1e293b"
+    alert_border = "#334155"
+else:
+    bg_color = "#f8fafc"
+    text_color = "#0f172a"
+    card_bg = "rgba(255, 255, 255, 0.8)"
+    card_border = "rgba(226, 232, 240, 0.8)"
+    subtitle_color = "#64748b"
+    input_border = "#e2e8f0"
+    shadow_color = "rgba(31, 38, 135, 0.05)"
+    popover_bg = "#ffffff"
+    placeholder_color = "#64748b"
+    alert_bg = "rgba(241, 245, 249, 0.8)"
+    alert_border = "rgba(226, 232, 240, 0.8)"
+
+# Configure page layout and style
 st.set_page_config(
     page_title="TemplateMachine Control Center",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
+
+
 # Custom premium styling
-st.markdown("""
+st.markdown(f"""
 <style>
     /* Google Fonts */
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
     
-    html, body, [class*="css"] {
-        font-family: 'Outfit', sans-serif;
-    }
+    :root {{
+        --background-color: {bg_color};
+        --text-color: {text_color};
+        --secondary-background-color: {popover_bg};
+    }}
     
-    code, pre {
+    html, body, [data-testid="stAppViewContainer"] {{
+        background-color: {bg_color} !important;
+        color: {text_color} !important;
+        transition: background-color 0.3s ease, color 0.3s ease;
+    }}
+    
+    /* Hide Streamlit header, footer, and sidebar & remove top spacing */
+    [data-testid="stHeader"], footer, [data-testid="stSidebar"] {{
+        display: none !important;
+    }}
+    
+    [data-testid="stMainBlockContainer"], .block-container {{
+        padding-top: 0.5rem !important;
+        margin-top: 0px !important;
+    }}
+    
+    html, body, [class*="css"] {{
+        font-family: 'Outfit', sans-serif;
+    }}
+    
+    h1:not(.main-title), h2, h3, h4, h5, h6, p, span, label, li {{
+        color: {text_color} !important;
+    }}
+    
+    code, pre {{
         font-family: 'JetBrains Mono', monospace !important;
-    }
+    }}
     
     /* Elegant Title and Badges */
-    .main-title {
+    .main-title {{
         background: linear-gradient(135deg, #4A90E2 0%, #50E3C2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
@@ -47,67 +107,133 @@ st.markdown("""
         font-weight: 700;
         margin-bottom: 0.2rem;
         letter-spacing: -0.5px;
-    }
-    .subtitle {
-        color: #8c96a3;
+    }}
+    .subtitle {{
+        color: {subtitle_color} !important;
         font-size: 1.15rem;
         margin-bottom: 2rem;
         font-weight: 300;
-    }
+    }}
     
     /* Premium Styled Card Container */
-    .card {
-        background: rgba(255, 255, 255, 0.8);
+    .card {{
+        background: {card_bg};
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
         border-radius: 16px;
-        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
+        box-shadow: 0 8px 32px 0 {shadow_color};
         padding: 1.8rem;
         margin-bottom: 1.8rem;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-    }
+        border: 1px solid {card_border};
+        color: {text_color};
+        transition: all 0.3s ease;
+    }}
     
     /* Styled widgets & alerts */
-    .stAlert {
+    .stAlert, div[data-testid="stAlert"] {{
         border-radius: 12px !important;
-        border: none !important;
+        border: 1px solid {alert_border} !important;
+        background-color: {alert_bg} !important;
+        color: {text_color} !important;
         box-shadow: 0 4px 12px rgba(0,0,0,0.02) !important;
-    }
-    
-    /* Sidebar premium background */
-    [data-testid="stSidebar"] {
-        background-color: #f7f9fc !important;
-        border-right: 1px solid #eef2f6 !important;
-    }
+    }}
     
     /* Button custom hover effects */
-    button[kind="primary"] {
+    button[kind="primary"] {{
         background: linear-gradient(135deg, #4A90E2 0%, #357ABD 100%) !important;
         border: none !important;
         color: white !important;
         box-shadow: 0 4px 15px rgba(74, 144, 226, 0.3) !important;
         transition: all 0.25s ease-in-out !important;
-    }
-    button[kind="primary"]:hover {
+    }}
+    button[kind="primary"]:hover {{
         transform: translateY(-2px) !important;
         box-shadow: 0 6px 20px rgba(74, 144, 226, 0.4) !important;
-    }
+    }}
     
-    button[kind="secondary"] {
+    button[kind="secondary"] {{
         border-radius: 8px !important;
-        border: 1px solid #e2e8f0 !important;
+        border: 1px solid {input_border} !important;
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
         transition: all 0.2s ease !important;
-    }
-    button[kind="secondary"]:hover {
+    }}
+    button[kind="secondary"]:hover {{
         border-color: #4A90E2 !important;
         color: #4A90E2 !important;
         background-color: rgba(74, 144, 226, 0.03) !important;
-    }
+    }}
     
-    .badge-icon {
+    .badge-icon {{
         font-size: 1.5rem;
         margin-right: 0.5rem;
-    }
+    }}
+    
+    /* Input fields and Selectboxes custom styling */
+    .stTextInput input,
+    .stSelectbox div[data-baseweb="select"],
+    .stSelectbox div[data-baseweb="select"] > div,
+    .stSelectbox div[role="combobox"],
+    .stSelectbox div[role="combobox"] > div,
+    .stNumberInput input,
+    .stTextArea textarea,
+    .stMultiSelect div[data-baseweb="select"],
+    .stMultiSelect div[data-baseweb="select"] > div {{
+        border-color: {input_border} !important;
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+    }}
+    
+    /* Input selected text color and control elements */
+    .stSelectbox div[data-baseweb="select"] *, 
+    .stSelectbox div[role="combobox"] *,
+    .stMultiSelect div[data-baseweb="select"] * {{
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+    }}
+    
+    /* Input field placeholders styling */
+    input::placeholder, textarea::placeholder {{
+        color: {placeholder_color} !important;
+        opacity: 0.75 !important;
+    }}
+    input::-webkit-input-placeholder, textarea::-webkit-input-placeholder {{
+        color: {placeholder_color} !important;
+        opacity: 0.75 !important;
+    }}
+    
+    /* baseweb popover dropdown lists styled */
+    div[data-baseweb="popover"], div[data-baseweb="menu"], ul[role="listbox"], li[role="option"] {{
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+    }}
+    
+    div[data-baseweb="popover"] ul, div[data-baseweb="popover"] li, div[data-baseweb="popover"] span {{
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+    }}
+    
+    /* baseweb hover highlights */
+    div[data-baseweb="popover"] li:hover,
+    div[data-baseweb="popover"] li[aria-selected="true"],
+    div[data-baseweb="popover"] li:hover * {{
+        background-color: #4A90E2 !important;
+        color: #ffffff !important;
+    }}
+    
+    /* Details & Expanders */
+    .streamlit-expanderHeader, details {{
+        background-color: {card_bg} !important;
+        color: {text_color} !important;
+        border-color: {card_border} !important;
+    }}
+    .streamlit-expanderContent {{
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+        border-color: {card_border} !important;
+    }}
+    
+    /* Responsive Theme Toggle */
 </style>
 """, unsafe_allow_html=True)
 
@@ -1035,48 +1161,39 @@ def rename_placeholder_in_template(template_path, old_name, new_name):
 
 configs, templates = scan_workspace()
 
-# SIDEBAR: Workspace Metrics & Quick Guide
-st.sidebar.markdown("""
-<div style="text-align: center; margin-bottom: 2rem;">
-    <span style="font-size: 3rem;">⚙️</span>
-    <h3 style="margin-top: 0.5rem; font-weight: 700; color: #FF4B4B;">TemplateMachine</h3>
-    <span style="color: #7f8c8d; font-size: 0.9rem;">Control Center v1.0</span>
-</div>
-""", unsafe_allow_html=True)
-
-st.sidebar.subheader("📊 Стан робочого простору")
-st.sidebar.metric("🗂️ Знайдено конфігів", len(configs))
-st.sidebar.metric("📄 Знайдено шаблонів", len(templates))
-
-# AI Settings in Sidebar
-st.sidebar.markdown("---")
-st.sidebar.subheader("📖 Коротка довідка")
-st.sidebar.info("""
-**1. Аналіз:** Порівнює кілька файлів та створює розумний шаблон (`template_*`) та Excel-конфіг.
-**2. Редагування:** Правити параметри генерації та значення змінних можна прямо в табі **Редактор конфігів**.
-**3. Генерація:** Швидко генерує готові Word/Excel файли на основі обраного конфігу.
-""")
-
-st.sidebar.warning("""
-⚠️ **Для безвіконного режиму (Headless):** Якщо додаток запущено на сервері без графічної оболонки, діалогові вікна вибору папок не відкриватимуться. Просто вводьте та копіюйте шляхи вручну в текстові поля!
-""")
-
 # MAIN PAGE HEADER
-st.markdown('<div class="main-title">🚀 Панель керування TemplateMachine</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Універсальний комбайн для автоматизації документів та аналізу архівів</div>', unsafe_allow_html=True)
+col_title, col_theme = st.columns([11, 1])
+with col_title:
+    st.markdown('<div class="main-title">🚀 Панель керування TemplateMachine</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Універсальний комбайн для автоматизації документів та аналізу архівів</div>', unsafe_allow_html=True)
+with col_theme:
+    st.write(" ") # spacer to push down button slightly
+    theme_emoji = "🌙" if theme == "light" else "☀️"
+    if st.button(theme_emoji, key="theme_toggle_btn", use_container_width=True):
+        st.session_state["theme"] = "dark" if theme == "light" else "light"
+        st.rerun()
 
-# TABS DEFINITION
-tab_analysis, tab_editor, tab_generator, tab_help = st.tabs([
-    "✈️ Аналіз та Створення Шаблонів",
-    "📝 Редактор Excel Конфігів",
-    "⚡ Генерація Документів",
-    "📖 Повна Довідка"
-])
+st.markdown("---")
+
+# View selector dropdown
+selected_view = st.selectbox(
+    "Оберіть розділ роботи:",
+    [
+        "✈️ Аналіз та Створення Шаблонів",
+        "📝 Редактор Excel Конфігів",
+        "⚡ Генерація Документів",
+        "📖 Повна Довідка"
+    ],
+    index=0,
+    key="app_view_selector"
+)
+
+st.markdown(" ")
 
 # ----------------------------------------------------
-# TAB 1: ARCHIVE ANALYSIS & TEMPLATE CREATION
+# VIEW 1: ARCHIVE ANALYSIS & TEMPLATE CREATION
 # ----------------------------------------------------
-with tab_analysis:
+if selected_view == "✈️ Аналіз та Створення Шаблонів":
     st.header("🔍 Режими аналізу та розпізнавання шаблонів")
     st.write("Скрипт проведе інтелектуальне попарне або групове порівняння документів, виділить змінні і створить конфігураційний файл.")
     
@@ -1256,9 +1373,9 @@ with tab_analysis:
     show_last_operation_logs()
 
 # ----------------------------------------------------
-# TAB 2: INTERACTIVE EXCEL CONFIG EDITOR
+# VIEW 2: INTERACTIVE EXCEL CONFIG EDITOR
 # ----------------------------------------------------
-with tab_editor:
+elif selected_view == "📝 Редактор Excel Конфігів":
     st.header("📝 Інтерактивний редактор файлів конфігурації")
     st.write("Оберіть будь-який створений конфіг-файл, щоб відредагувати параметри шаблону, імені або змінити дані змінних та аркушів.")
     
@@ -1686,9 +1803,9 @@ with tab_editor:
                     st.warning("Будь ласка, вкажіть шлях до файлу шаблону в полі A1, щоб активувати попередній перегляд!")
 
 # ----------------------------------------------------
-# TAB 3: DOCUMENT GENERATION & PROGRESS TRACKING
+# VIEW 3: DOCUMENT GENERATION & PROGRESS TRACKING
 # ----------------------------------------------------
-with tab_generator:
+elif selected_view == "⚡ Генерація Документів":
     st.header("⚡ Масова генерація документів")
     st.write("Оберіть файл конфігурації, перевірте шлях до шаблону і запустіть автоматичне заповнення.")
     
@@ -1855,9 +1972,9 @@ with tab_generator:
     show_last_operation_logs()
 
 # ----------------------------------------------------
-# TAB 4: HELP & DOCUMENTATION
+# VIEW 4: HELP & DOCUMENTATION
 # ----------------------------------------------------
-with tab_help:
+elif selected_view == "📖 Повна Довідка":
     st.header("📖 Повний посібник користувача.")
     st.write("Детальний опис можливостей та технічний посібник роботи комбайна (завантажено з _templates_machine_.txt).")
     

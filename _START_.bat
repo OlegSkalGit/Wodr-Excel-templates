@@ -34,7 +34,7 @@ REM 3. Перевірка наявності необхідних бібліотек
 .venv\Scripts\python.exe -c "import streamlit, pandas, openpyxl, docxtpl" >nul 2>nul
 if %ERRORLEVEL% == 0 goto skipbase
 echo.
-echo [!] Встановлення та оновлення бібліотек (streamlit, pandas тощо)...
+echo [!] Встановлення та оновлення бібліотек...
 .venv\Scripts\pip install streamlit pandas openpyxl docxtpl
 if errorlevel 1 (
     echo [Помилка] Не вдалося встановити бібліотеки. Перевірте з'єднання з інтернетом.
