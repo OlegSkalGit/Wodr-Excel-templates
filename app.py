@@ -416,6 +416,162 @@ def get_formatted_documentation_markdown():
     return "### 📖 Документація\nНе вдалося завантажити файл довідки `_templates_machine_.txt`. Будь ласка, переконайтеся, що файл існує у робочій папці."
 
 # ----------------------------------------------------
+# PROJECT MANAGER HELPERS & SCANNERS
+# ----------------------------------------------------
+
+def is_excel_config(file_path):
+    """Robust algorithm to distinguish config Excel files from regular spreadsheets."""
+    if not file_path.endswith('.xlsx') or os.path.basename(file_path).startswith('~$'):
+        return False
+    try:
+        wb = openpyxl.load_workbook(file_path, read_only=True)
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            # Read cells A1 and A2
+            a1 = ws.cell(row=1, column=1).value
+            a2 = ws.cell(row=2, column=1).value
+            if a1 and isinstance(a1, str):
+                a1_lower = a1.lower()
+                if any(ext in a1_lower for ext in ['.docx', '.xlsx']) or 'template' in a1_lower:
+                    return True
+            if a2 and isinstance(a2, str):
+                a2_lower = a2.lower()
+                if any(ext in a2_lower for ext in ['.docx', '.xlsx']) or '{{' in a2_lower:
+                    return True
+        return False
+    except Exception:
+        return False
+
+def scan_recursive_configs(root_folder):
+    """Walks the folder structure recursively and returns a list of config files."""
+    config_files = []
+    if not os.path.exists(root_folder) or not os.path.isdir(root_folder):
+        return []
+    for dirpath, _, filenames in os.walk(root_folder):
+        for f in filenames:
+            if f.endswith('.xlsx') and not f.startswith('~$'):
+                full_path = os.path.abspath(os.path.join(dirpath, f))
+                if is_excel_config(full_path):
+                    config_files.append(full_path)
+    return sorted(config_files)
+
+def build_dir_tree(config_files, root_path):
+    """Builds a nested directory tree dictionary from config paths."""
+    tree = {}
+    for path in config_files:
+        rel_path = os.path.relpath(path, root_path)
+        parts = rel_path.split(os.sep)
+        current = tree
+        for part in parts[:-1]:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        current[parts[-1]] = path
+    return tree
+
+def resolve_virtual_doc_name(pattern, row_data, template_path):
+    """Resolves output document name using date/time variables and row data."""
+    from datetime import datetime
+    now = datetime.now()
+    now_vars = {
+        "YYYY": now.strftime("%Y"),
+        "MM": now.strftime("%m"),
+        "DD": now.strftime("%d"),
+        "hh": now.strftime("%H"),
+        "mm": now.strftime("%M"),
+        "ss": now.strftime("%S")
+    }
+    variables = {**now_vars, **row_data}
+    
+    result = str(pattern)
+    for key, val in variables.items():
+        pattern_re = r"\{\{\s*" + re.escape(key) + r"\s*\}\}"
+        result = re.sub(pattern_re, str(val), result)
+        
+    if template_path:
+        ext = os.path.splitext(template_path)[1].lower()
+        if not result.lower().endswith(ext):
+            result += ext
+    return result
+
+def save_generated_document_dialog(template_path, variables, config_path):
+    """Generates the document and opens a native Windows dialog to save it, with fallback."""
+    import tkinter as tk
+    from tkinter import filedialog
+    from _templates_machine_ import process_word, process_excel
+    import tempfile
+    
+    cfg_dir = os.path.dirname(os.path.abspath(config_path))
+    actual_t_path = template_path
+    if not os.path.isabs(template_path):
+        cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
+        cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
+        cand3 = os.path.abspath(template_path)
+        cand4 = os.path.abspath(os.path.basename(template_path))
+        if os.path.exists(cand1): actual_t_path = cand1
+        elif os.path.exists(cand2): actual_t_path = cand2
+        elif os.path.exists(cand3): actual_t_path = cand3
+        elif os.path.exists(cand4): actual_t_path = cand4
+        
+    if not os.path.exists(actual_t_path):
+        st.error(f"Шаблон не знайдено: {template_path}")
+        return
+        
+    ext = os.path.splitext(actual_t_path)[1].lower()
+    
+    # Attempt native save dialog
+    saved = False
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.wm_attributes('-topmost', 1)
+        
+        filetypes = [("Word Document", "*.docx")] if ext == ".docx" else [("Excel Workbook", "*.xlsx")]
+        default_ext = ext
+        
+        save_path = filedialog.asksaveasfilename(
+            parent=root,
+            title="Зберегти згенерований документ",
+            filetypes=filetypes,
+            defaultextension=default_ext,
+            initialfile=os.path.basename(resolve_virtual_doc_name(variables.get("name_pattern", "document"), variables, template_path))
+        )
+        root.destroy()
+        
+        if save_path:
+            if ext == ".docx":
+                process_word(actual_t_path, save_path, variables)
+            elif ext == ".xlsx":
+                process_excel(actual_t_path, save_path, variables)
+            st.success(f"🎉 Документ успішно збережено: {save_path}")
+            saved = True
+    except Exception as e:
+        st.warning(f"Не вдалося відкрити діалогове вікно збереження Windows: {e}. Використовуємо завантаження через браузер.")
+        
+    if not saved:
+        # Fallback to browser download button
+        temp_dir = tempfile.gettempdir()
+        temp_file = os.path.join(temp_dir, "generated_doc" + ext)
+        try:
+            if ext == ".docx":
+                process_word(actual_t_path, temp_file, variables)
+            elif ext == ".xlsx":
+                process_excel(actual_t_path, temp_file, variables)
+                
+            with open(temp_file, "rb") as f:
+                file_bytes = f.read()
+                
+            st.download_button(
+                label="⬇️ Завантажити згенерований документ через браузер",
+                data=file_bytes,
+                file_name=os.path.basename(temp_file),
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="pm_download_fallback_btn"
+            )
+        except Exception as e_gen:
+            st.error(f"Помилка генерації документа: {e_gen}")
+
+# ----------------------------------------------------
 # SYSTEM STATE & WORKSPACE SCANNING
 # ----------------------------------------------------
 
@@ -438,6 +594,28 @@ def scan_workspace():
 # ----------------------------------------------------
 # EXCEL CONFIG READ/WRITE WITH OPENPYXL
 # ----------------------------------------------------
+
+def get_cached_config(config_path):
+    """Retrieves config data from cache or loads it if stale/missing."""
+    if "pm_cached_configs" not in st.session_state:
+        st.session_state["pm_cached_configs"] = {}
+        
+    try:
+        mtime = os.path.getmtime(config_path)
+    except Exception:
+        mtime = 0
+        
+    cache_entry = st.session_state["pm_cached_configs"].get(config_path)
+    if cache_entry and cache_entry.get("mtime") == mtime:
+        return cache_entry["data"]
+        
+    data = load_excel_config(config_path)
+    if data:
+        st.session_state["pm_cached_configs"][config_path] = {
+            "mtime": mtime,
+            "data": data
+        }
+    return data
 
 def load_excel_config(filepath):
     """Loads all data sheets from an Excel config safely."""
@@ -468,10 +646,12 @@ def load_excel_config(filepath):
                 row_vals = {}
                 has_value = False
                 for col_idx, h in enumerate(headers):
-                    cell_val = sheet.cell(row=r, column=col_idx + 1).value
+                    cell = sheet.cell(row=r, column=col_idx + 1)
+                    cell_val = cell.value
                     if cell_val is not None:
                         has_value = True
                     row_vals[h] = str(cell_val) if cell_val is not None else ""
+                    row_vals[f"{h}_type_code"] = cell.data_type
                 if has_value:
                     rows.append(row_vals)
                     
@@ -525,15 +705,38 @@ def save_excel_config(filepath, sheet_name, template_path, name_pattern, headers
                 val = row_dict.get(h, "")
                 cell = sheet.cell(row=5 + r_idx, column=c_idx + 1)
                 
-                # Check if it looks like a number
+                type_code = row_dict.get(f"{h}_type_code", "s")
+                
                 if isinstance(val, str):
                     val_strip = val.strip()
-                    if val_strip.isdigit():
-                        cell.value = int(val_strip)
-                    elif re.match(r'^\d+\.\d+$', val_strip):
-                        cell.value = float(val_strip)
+                    if type_code == "n":
+                        try:
+                            if "." in val_strip or "e" in val_strip.lower():
+                                cell.value = float(val_strip)
+                            else:
+                                cell.value = int(val_strip)
+                        except ValueError:
+                            cell.value = val
+                    elif type_code == "b":
+                        if val_strip.lower() in ["true", "1", "yes"]:
+                            cell.value = True
+                        elif val_strip.lower() in ["false", "0", "no"]:
+                            cell.value = False
+                        else:
+                            cell.value = val
+                    elif type_code == "d":
+                        try:
+                            from datetime import datetime
+                            cell.value = datetime.fromisoformat(val_strip)
+                        except ValueError:
+                            cell.value = val
                     else:
-                        cell.value = val
+                        if val_strip.isdigit():
+                            cell.value = int(val_strip)
+                        elif re.match(r'^\d+\.\d+$', val_strip):
+                            cell.value = float(val_strip)
+                        else:
+                            cell.value = val
                 else:
                     cell.value = val
                     
@@ -798,7 +1001,7 @@ for key in [
         else:
             st.session_state[key] = ""
 
-def generate_docx_preview(template_path, variables):
+def generate_docx_preview(template_path, variables, config_path=None):
     """Generates a temporary Word document and extracts its content for quick preview in high-fidelity HTML."""
     import tempfile
     from docx import Document
@@ -807,8 +1010,9 @@ def generate_docx_preview(template_path, variables):
     
     # Resolve relative template paths relative to the current Excel config directory if needed
     actual_path = template_path
-    if not os.path.isabs(template_path) and "editor_config_path" in st.session_state:
-        cfg_dir = os.path.dirname(os.path.abspath(st.session_state["editor_config_path"]))
+    c_path = config_path or st.session_state.get("editor_config_path")
+    if not os.path.isabs(template_path) and c_path:
+        cfg_dir = os.path.dirname(os.path.abspath(c_path))
         cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
         cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
         cand3 = os.path.abspath(template_path)
@@ -988,17 +1192,19 @@ def generate_docx_preview(template_path, variables):
     except Exception as e:
         return f"<div style='color: red; font-weight: bold;'>Помилка попереднього перегляду Word: {e}</div>"
 
-def generate_xlsx_preview(template_path, variables):
+def generate_xlsx_preview(template_path, variables, config_path=None):
     """Generates a temporary Excel document and extracts its content for quick preview in high-fidelity HTML."""
     import tempfile
     import openpyxl
     from openpyxl.styles import PatternFill
     from _templates_machine_ import process_excel
+    import html as py_html
     
     # Resolve relative template paths relative to the current Excel config directory if needed
     actual_path = template_path
-    if not os.path.isabs(template_path) and "editor_config_path" in st.session_state:
-        cfg_dir = os.path.dirname(os.path.abspath(st.session_state["editor_config_path"]))
+    c_path = config_path or st.session_state.get("editor_config_path")
+    if not os.path.isabs(template_path) and c_path:
+        cfg_dir = os.path.dirname(os.path.abspath(c_path))
         cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
         cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
         cand3 = os.path.abspath(template_path)
@@ -1022,7 +1228,8 @@ def generate_xlsx_preview(template_path, variables):
     
     try:
         process_excel(actual_path, temp_out, variables)
-        wb = openpyxl.load_workbook(temp_out, data_only=True)
+        # Load with data_only=False to retrieve Excel formula strings instead of blank/None cells
+        wb = openpyxl.load_workbook(temp_out, data_only=False)
         
         html = []
         html.append("<div style='font-family: \"Segoe UI\", Tahoma, Geneva, Verdana, sans-serif; color: #1a202c; overflow-x: auto;'>")
@@ -1044,6 +1251,14 @@ def generate_xlsx_preview(template_path, variables):
                     val = cell.value
                     if val is None:
                         val = ""
+                        
+                    val_str = str(val).strip()
+                    if val_str.startswith('='):
+                        # Excel formula formatting
+                        escaped_formula = py_html.escape(val_str)
+                        val_display = f"<span style='color: #2b6cb0; font-family: \"JetBrains Mono\", monospace; font-size: 11px; font-weight: 500; background-color: #ebf8ff; border: 1px solid #bee3f8; border-radius: 4px; padding: 2px 6px; display: inline-block;'>fx {escaped_formula}</span>"
+                    else:
+                        val_display = py_html.escape(str(val) if val is not None else "")
                         
                     styles = []
                     if cell.alignment:
@@ -1077,7 +1292,7 @@ def generate_xlsx_preview(template_path, variables):
                                 styles.append(f"background-color: #{rgb};")
                                 
                     styles_str = " ".join(styles)
-                    html.append(f"<td style='border: 1px solid #cbd5e1; padding: 6px 12px; min-width: 80px; {styles_str}'>{val}</td>")
+                    html.append(f"<td style='border: 1px solid #cbd5e1; padding: 6px 12px; min-width: 80px; {styles_str}'>{val_display}</td>")
                 html.append("</tr>")
             html.append("</table>")
             
@@ -1229,6 +1444,7 @@ st.markdown("---")
 
 # Initialize session state for active view retention
 views_list = [
+    "Менеджер Проектів",
     "✈️ Аналіз та Створення Шаблонів",
     "📝 Редактор Excel Конфігів",
     "⚡ Генерація Документів",
@@ -1252,6 +1468,259 @@ selected_view = st.selectbox(
 st.session_state["current_view"] = selected_view
 
 st.markdown(" ")
+
+# ----------------------------------------------------
+# VIEW 0: PROJECT MANAGER & DOCUMENT TREE
+# ----------------------------------------------------
+if selected_view == "Менеджер Проектів":
+    st.header("📁 Менеджер Проектів та Віртуальне Дерево Документів")
+    st.write("Вкажіть шлях до папки, щоб автоматично просканувати всі конфіги та побудувати дерево віртуальних документів.")
+    
+    # 1. Folder picker / text input
+    if "pm_folder_path" not in st.session_state:
+        st.session_state["pm_folder_path"] = ""
+        
+    col_p1, col_p2 = st.columns([3, 1])
+    with col_p1:
+        folder_input = st.text_input(
+            "📁 Шлях до папки з конфігами та шаблонами:",
+            placeholder="Введіть або оберіть шлях до папки (наприклад, example)...",
+            key="pm_folder_path"
+        )
+    with col_p2:
+        st.write(" ")
+        st.write(" ")
+        def select_pm_folder():
+            selected = open_folder_picker("Оберіть папку з конфігами")
+            if selected:
+                st.session_state["pm_folder_path"] = selected
+        st.button("📁 Обрати папку", key="btn_pm_folder", on_click=select_pm_folder)
+        
+    pm_path = st.session_state["pm_folder_path"]
+    
+    if not pm_path:
+        st.info("Будь ласка, оберіть або введіть шлях до папки для сканування.")
+    elif not os.path.exists(pm_path):
+        st.error(f"Вказаний шлях '{pm_path}' не існує!")
+    else:
+        # Scan and build tree
+        with st.spinner("⏳ Сканування папки..."):
+            config_files = scan_recursive_configs(pm_path)
+            
+        if not config_files:
+            st.warning("У вказаній папці не знайдено жодного Excel-конфігу.")
+        else:
+            # Build tree dictionary
+            dir_tree = build_dir_tree(config_files, pm_path)
+            
+            # Setup split layout: Tree on the left, Preview & Edit on the right
+            col_tree, col_content = st.columns([5, 7])
+            
+            with col_tree:
+                st.subheader("🌳 Віртуальне дерево документів")
+                
+                # Recursive tree renderer
+                def render_tree_node(node_name, node_value, depth=0):
+                    if isinstance(node_value, dict):
+                        # Folder node
+                        with st.expander("📁 " + node_name, expanded=(depth == 0)):
+                            for name, val in node_value.items():
+                                render_tree_node(name, val, depth + 1)
+                    else:
+                        # Config file node
+                        config_path = node_value
+                        config_name = node_name
+                        with st.expander("📊 " + config_name, expanded=False):
+                            sheets_data = get_cached_config(config_path)
+                            if not sheets_data:
+                                st.caption("Не вдалося завантажити або порожній конфіг")
+                                return
+                            
+                            for sheet_name, info in sheets_data.items():
+                                rows = info["rows"]
+                                template_path = info["template_path"]
+                                name_pattern = info["name_pattern"]
+                                
+                                with st.expander(f"📋 {sheet_name} ({len(rows)} док.)", expanded=False):
+                                    if not rows:
+                                        st.caption("Немає даних для генерації")
+                                        continue
+                                    
+                                    for idx, row in enumerate(rows):
+                                        doc_name = resolve_virtual_doc_name(name_pattern, row, template_path)
+                                        if not doc_name.strip():
+                                            doc_name = f"document_{idx + 5}"
+                                            
+                                        is_selected = (
+                                            st.session_state.get("pm_selected_doc", {}).get("config_path") == config_path and
+                                            st.session_state.get("pm_selected_doc", {}).get("sheet_name") == sheet_name and
+                                            st.session_state.get("pm_selected_doc", {}).get("row_idx") == idx
+                                        )
+                                        
+                                        button_type = "primary" if is_selected else "secondary"
+                                        
+                                        if st.button(
+                                            f"📄 {doc_name}",
+                                            key=f"pm_btn_{config_path}_{sheet_name}_{idx}",
+                                            use_container_width=True,
+                                            type=button_type
+                                        ):
+                                            st.session_state["pm_selected_doc"] = {
+                                                "config_path": config_path,
+                                                "sheet_name": sheet_name,
+                                                "row_idx": idx,
+                                                "doc_name": doc_name,
+                                                "template_path": template_path,
+                                                "name_pattern": name_pattern
+                                            }
+                                            if "pm_editing_vars" in st.session_state:
+                                                del st.session_state["pm_editing_vars"]
+                                            st.rerun()
+
+                # Render tree roots
+                for name, val in dir_tree.items():
+                    render_tree_node(name, val, 0)
+                    
+            with col_content:
+                selected_doc = st.session_state.get("pm_selected_doc")
+                if not selected_doc:
+                    st.info("👈 Оберіть віртуальний документ у дереві ліворуч, щоб почати перегляд та редагування.")
+                else:
+                    config_path = selected_doc["config_path"]
+                    sheet_name = selected_doc["sheet_name"]
+                    row_idx = selected_doc["row_idx"]
+                    template_path = selected_doc["template_path"]
+                    name_pattern = selected_doc["name_pattern"]
+                    
+                    st.subheader("🛠️ Перегляд та редагування")
+                    
+                    # Display metadata paths
+                    st.caption(f"**Конфіг:** `{os.path.basename(config_path)}` | **Аркуш:** `{sheet_name}` | **Шаблон:** `{template_path}`")
+                    
+                    sheets_data = get_cached_config(config_path)
+                    if not sheets_data or sheet_name not in sheets_data:
+                        st.error("Помилка завантаження даних документа.")
+                    else:
+                        sheet_info = sheets_data[sheet_name]
+                        headers = sheet_info["headers"]
+                        row_vars = sheet_info["rows"][row_idx]
+                        
+                        # Initialize editing variables
+                        if "pm_editing_vars" not in st.session_state:
+                            st.session_state["pm_editing_vars"] = dict(row_vars)
+                            
+                        edited_vars = st.session_state["pm_editing_vars"]
+                        
+                        # Show dynamic output name preview
+                        current_resolved_name = resolve_virtual_doc_name(name_pattern, edited_vars, template_path)
+                        st.markdown(f"##### 📄 Вихідне ім'я: `{current_resolved_name}`")
+                        
+                        # Render editing inputs
+                        st.markdown("##### ✏️ Змінні цього документа:")
+                        var_cols = st.columns(3)
+                        for idx, h in enumerate(headers):
+                            if not h:
+                                continue
+                            with var_cols[idx % 3]:
+                                val = edited_vars.get(h, "")
+                                new_val = st.text_input(f"{h}", value=val, key=f"pm_input_{config_path}_{sheet_name}_{row_idx}_{h}")
+                                if new_val != val:
+                                    edited_vars[h] = new_val
+                                    st.rerun()
+                                    
+                        # Buttons row
+                        st.markdown(" ")
+                        btn_col1, btn_col2, btn_col3 = st.columns(3)
+                        
+                        with btn_col1:
+                            if st.button("💾 Зберегти зміни в конфіг", type="primary", use_container_width=True):
+                                # Load fresh config data to write
+                                full_data = load_excel_config(config_path)
+                                if full_data and sheet_name in full_data:
+                                    # Update target row
+                                    full_data[sheet_name]["rows"][row_idx] = edited_vars
+                                    
+                                    # Save to file
+                                    success = save_excel_config(
+                                        config_path,
+                                        sheet_name,
+                                        full_data[sheet_name]["template_path"],
+                                        full_data[sheet_name]["name_pattern"],
+                                        full_data[sheet_name]["headers"],
+                                        full_data[sheet_name]["rows"]
+                                    )
+                                    if success:
+                                        # Clear cache for this config
+                                        if config_path in st.session_state["pm_cached_configs"]:
+                                            del st.session_state["pm_cached_configs"][config_path]
+                                        st.toast("🎉 Зміни успішно збережено в Excel!", icon="💾")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                        
+                        with btn_col2:
+                            if st.button("📄 Зберегти документ", use_container_width=True):
+                                # Resolve absolute template path
+                                cfg_dir = os.path.dirname(os.path.abspath(config_path))
+                                actual_t_path = template_path
+                                if not os.path.isabs(template_path):
+                                    cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
+                                    cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
+                                    cand3 = os.path.abspath(template_path)
+                                    cand4 = os.path.abspath(os.path.basename(template_path))
+                                    if os.path.exists(cand1): actual_t_path = cand1
+                                    elif os.path.exists(cand2): actual_t_path = cand2
+                                    elif os.path.exists(cand3): actual_t_path = cand3
+                                    elif os.path.exists(cand4): actual_t_path = cand4
+                                    
+                                save_generated_document_dialog(actual_t_path, edited_vars, config_path)
+                                
+                        with btn_col3:
+                            def go_to_config_editor():
+                                st.session_state["current_view"] = "📝 Редактор Excel Конфігів"
+                                st.session_state["app_view_selector"] = "📝 Редактор Excel Конфігів"
+                                st.session_state["editor_config_path"] = config_path
+                                st.session_state["editor_selected_sheet"] = sheet_name
+                                st.session_state["widget_editor_sheet"] = sheet_name
+                                st.session_state["loaded_config_sheet"] = ""  # Force reload headers and data
+                            st.button("✏️ Перейти до редактора конфігів", use_container_width=True, on_click=go_to_config_editor)
+                                
+                        # High fidelity preview
+                        st.markdown(" ")
+                        st.markdown("##### 🔍 Попередній перегляд документа")
+                        
+                        # Resolve relative template path
+                        cfg_dir = os.path.dirname(os.path.abspath(config_path))
+                        actual_template_path = template_path
+                        if not os.path.isabs(template_path):
+                            cand1 = os.path.abspath(os.path.join(cfg_dir, template_path))
+                            cand2 = os.path.abspath(os.path.join(cfg_dir, os.path.basename(template_path)))
+                            cand3 = os.path.abspath(template_path)
+                            cand4 = os.path.abspath(os.path.basename(template_path))
+                            if os.path.exists(cand1): actual_template_path = cand1
+                            elif os.path.exists(cand2): actual_template_path = cand2
+                            elif os.path.exists(cand3): actual_template_path = cand3
+                            elif os.path.exists(cand4): actual_template_path = cand4
+                            
+                        if not os.path.exists(actual_template_path):
+                            st.warning(f"Шаблон не знайдено за шляхом: {template_path} (враховуючи відносність до конфігу)")
+                        else:
+                            ext = os.path.splitext(actual_template_path)[1].lower()
+                            with st.spinner("⏳ Генерація прев'ю..."):
+                                if ext == ".docx":
+                                    preview_html = generate_docx_preview(actual_template_path, edited_vars, config_path=config_path)
+                                elif ext == ".xlsx":
+                                    preview_html = generate_xlsx_preview(actual_template_path, edited_vars, config_path=config_path)
+                                else:
+                                    preview_html = f"<div style='color: #e53e3e;'>Непідтримуваний тип шаблону: {ext}</div>"
+                                    
+                            st.markdown(
+                                f"""
+                                <div style="border: 2px solid #3182ce; border-radius: 8px; padding: 25px; background-color: #ffffff; max-height: 500px; overflow-y: auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-left: 8px solid #3182ce;">
+                                    {preview_html}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
 
 # ----------------------------------------------------
 # VIEW 1: ARCHIVE ANALYSIS & TEMPLATE CREATION
