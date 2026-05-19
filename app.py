@@ -96,6 +96,23 @@ st.markdown(f"""
     
     code, pre {{
         font-family: 'JetBrains Mono', monospace !important;
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+        border: 1px solid {card_border} !important;
+        border-radius: 6px !important;
+        padding: 0.2rem 0.4rem !important;
+    }}
+    
+    pre {{
+        padding: 1rem !important;
+        overflow-x: auto !important;
+        background-color: {popover_bg} !important;
+    }}
+    
+    pre code {{
+        background-color: transparent !important;
+        border: none !important;
+        padding: 0 !important;
     }}
     
     /* Elegant Title and Badges */
@@ -162,6 +179,41 @@ st.markdown(f"""
         border-color: #4A90E2 !important;
         color: #4A90E2 !important;
         background-color: rgba(74, 144, 226, 0.03) !important;
+    }}
+    
+    /* Code block copy toolbar buttons styled */
+    button[kind="elementToolbar"], button[data-testid="stBaseButton-elementToolbar"] {{
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+        border: 1px solid {card_border} !important;
+        border-radius: 6px !important;
+    }}
+    button[kind="elementToolbar"] svg, button[data-testid="stBaseButton-elementToolbar"] svg {{
+        fill: {text_color} !important;
+        color: {text_color} !important;
+    }}
+    button[kind="elementToolbar"]:hover, button[data-testid="stBaseButton-elementToolbar"]:hover {{
+        background-color: #4A90E2 !important;
+        color: white !important;
+        border-color: #4A90E2 !important;
+    }}
+    button[kind="elementToolbar"]:hover svg, button[data-testid="stBaseButton-elementToolbar"]:hover svg {{
+        fill: white !important;
+        color: white !important;
+    }}
+    
+    /* Tooltip popup styled */
+    div[data-baseweb="tooltip"],
+    div[data-baseweb="tooltip"] *,
+    div[data-testid="stTooltipContent"],
+    div[data-testid="stTooltipContent"] * {{
+        background-color: {popover_bg} !important;
+        color: {text_color} !important;
+    }}
+    div[data-baseweb="tooltip"] {{
+        border: 1px solid {card_border} !important;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 12px {shadow_color} !important;
     }}
     
     .badge-icon {{
@@ -1175,18 +1227,29 @@ with col_theme:
 
 st.markdown("---")
 
-# View selector dropdown
+# Initialize session state for active view retention
+views_list = [
+    "✈️ Аналіз та Створення Шаблонів",
+    "📝 Редактор Excel Конфігів",
+    "⚡ Генерація Документів",
+    "📖 Повна Довідка"
+]
+
+if "current_view" not in st.session_state:
+    st.session_state["current_view"] = views_list[0]
+
+# Ensure session state value matches index securely
+default_view_index = 0
+if st.session_state["current_view"] in views_list:
+    default_view_index = views_list.index(st.session_state["current_view"])
+
 selected_view = st.selectbox(
     "Оберіть розділ роботи:",
-    [
-        "✈️ Аналіз та Створення Шаблонів",
-        "📝 Редактор Excel Конфігів",
-        "⚡ Генерація Документів",
-        "📖 Повна Довідка"
-    ],
-    index=0,
+    views_list,
+    index=default_view_index,
     key="app_view_selector"
 )
+st.session_state["current_view"] = selected_view
 
 st.markdown(" ")
 
@@ -1975,12 +2038,29 @@ elif selected_view == "⚡ Генерація Документів":
 # VIEW 4: HELP & DOCUMENTATION
 # ----------------------------------------------------
 elif selected_view == "📖 Повна Довідка":
-    st.header("📖 Повний посібник користувача.")
+    # Inject giant card container styling for the documentation page
+    st.markdown(f"""
+    <style>
+        [data-testid="stMainBlockContainer"], .block-container {{
+            background: {card_bg} !important;
+            backdrop-filter: blur(10px) !important;
+            -webkit-backdrop-filter: blur(10px) !important;
+            border: 1px solid {card_border} !important;
+            border-radius: 16px !important;
+            box-shadow: 0 8px 32px 0 {shadow_color} !important;
+            padding: 3rem !important;
+            margin-top: 1.5rem !important;
+            margin-bottom: 2.5rem !important;
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.header("📖 Повний посібник користувача")
     st.write("Детальний опис можливостей та технічний посібник роботи комбайна (завантажено з _templates_machine_.txt).")
     
     st.markdown("---")
     
     doc_markdown = get_formatted_documentation_markdown()
-    st.markdown(doc_markdown, unsafe_allow_html=True)
+    st.markdown(doc_markdown)
 
 # End of file
