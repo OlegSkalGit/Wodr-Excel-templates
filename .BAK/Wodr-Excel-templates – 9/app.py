@@ -494,7 +494,7 @@ def resolve_virtual_doc_name(pattern, row_data, template_path):
             result += ext
     return result
 
-def save_generated_document_dialog(template_path, variables, config_path, name_pattern=None):
+def save_generated_document_dialog(template_path, variables, config_path):
     """Generates the document and opens a native Windows dialog to save it, with fallback."""
     import tkinter as tk
     from tkinter import filedialog
@@ -511,10 +511,6 @@ def save_generated_document_dialog(template_path, variables, config_path, name_p
         
     ext = os.path.splitext(actual_t_path)[1].lower()
     
-    if not name_pattern:
-        name_pattern = variables.get("name_pattern", "document")
-    proposed_filename = os.path.basename(resolve_virtual_doc_name(name_pattern, variables, template_path))
-    
     # Attempt native save dialog
     saved = False
     try:
@@ -530,7 +526,7 @@ def save_generated_document_dialog(template_path, variables, config_path, name_p
             title="Зберегти згенерований документ",
             filetypes=filetypes,
             defaultextension=default_ext,
-            initialfile=proposed_filename
+            initialfile=os.path.basename(resolve_virtual_doc_name(variables.get("name_pattern", "document"), variables, template_path))
         )
         root.destroy()
         
@@ -547,7 +543,7 @@ def save_generated_document_dialog(template_path, variables, config_path, name_p
     if not saved:
         # Fallback to browser download button
         temp_dir = tempfile.gettempdir()
-        temp_file = os.path.join(temp_dir, proposed_filename)
+        temp_file = os.path.join(temp_dir, "generated_doc" + ext)
         try:
             if ext == ".docx":
                 process_word(actual_t_path, temp_file, variables)
@@ -560,7 +556,7 @@ def save_generated_document_dialog(template_path, variables, config_path, name_p
             st.download_button(
                 label="⬇️ Завантажити згенерований документ через браузер",
                 data=file_bytes,
-                file_name=proposed_filename,
+                file_name=os.path.basename(temp_file),
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="pm_download_fallback_btn"
             )
@@ -1516,7 +1512,7 @@ if selected_view == "Менеджер Проектів":
                                 cfg_dir = os.path.dirname(os.path.abspath(config_path))
                                 actual_t_path = resolve_path(cfg_dir, template_path)
                                     
-                                save_generated_document_dialog(actual_t_path, edited_vars, config_path, name_pattern=name_pattern)
+                                save_generated_document_dialog(actual_t_path, edited_vars, config_path)
                                 
                         with btn_col3:
                             def go_to_config_editor():
