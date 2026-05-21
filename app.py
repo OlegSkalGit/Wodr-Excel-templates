@@ -293,7 +293,7 @@ st.markdown(f"""
 # HELPER FUNCTIONS FOR FILE & WINDOWS DIALOGS
 # ----------------------------------------------------
 
-def open_folder_picker(title="Оберіть папку"):
+def open_folder_picker(title="Оберіть папку", initialdir=None):
     """Opens a native Windows directory selection dialog."""
     try:
         import tkinter as tk
@@ -301,14 +301,18 @@ def open_folder_picker(title="Оберіть папку"):
         root = tk.Tk()
         root.withdraw()
         root.wm_attributes('-topmost', 1)
-        folder = filedialog.askdirectory(parent=root, title=title)
+        if not initialdir:
+            initialdir = st.session_state.get("last_opened_folder") or ""
+        if not initialdir or not os.path.exists(initialdir) or not os.path.isdir(initialdir):
+            initialdir = os.getcwd()
+        folder = filedialog.askdirectory(parent=root, title=title, initialdir=initialdir)
         root.destroy()
         return folder
     except Exception as e:
         st.warning("Не вдалося відкрити діалогове вікно Windows. Будь ласка, введіть шлях вручну.")
         return ""
 
-def open_file_picker(filetypes=None):
+def open_file_picker(filetypes=None, initialdir=None):
     """Opens a native Windows file selection dialog."""
     try:
         import tkinter as tk
@@ -318,7 +322,11 @@ def open_file_picker(filetypes=None):
         root.wm_attributes('-topmost', 1)
         if filetypes is None:
             filetypes = [("Усі підтримувані", "*.docx;*.xlsx"), ("Word файли", "*.docx"), ("Excel файли", "*.xlsx"), ("Усі файли", "*.*")]
-        file = filedialog.askopenfilename(parent=root, title="Оберіть файл-зразок", filetypes=filetypes)
+        if not initialdir:
+            initialdir = st.session_state.get("last_opened_folder") or ""
+        if not initialdir or not os.path.exists(initialdir) or not os.path.isdir(initialdir):
+            initialdir = os.getcwd()
+        file = filedialog.askopenfilename(parent=root, title="Оберіть файл-зразок", filetypes=filetypes, initialdir=initialdir)
         root.destroy()
         return file
     except Exception as e:
@@ -871,7 +879,9 @@ for key in [
     "txt_auto_folder", "txt_batch_sample", "txt_batch_folder", 
     "txt_pair_file1", "txt_pair_file2", "editor_config_path", 
     "gen_config_path", "gen_output_dir", "analysis_output_dir",
-    "last_operation_logs", "last_operation_status", "last_operation_cmd"
+    "last_operation_logs", "last_operation_status", "last_operation_cmd",
+    "last_opened_folder", "last_opened_config", "last_opened_template",
+    "pm_folder_path"
 ]:
     if key not in st.session_state:
         if key == "last_operation_logs":
@@ -880,6 +890,38 @@ for key in [
             st.session_state[key] = None if key == "last_operation_status" else ""
         else:
             st.session_state[key] = ""
+
+# Load/Save persistent state to maintain context across restarts
+import json
+STATE_FILE = ".last_state.json"
+
+def load_persistent_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f)
+                for k, v in state.items():
+                    if v is not None:
+                        st.session_state[k] = v
+        except Exception:
+            pass
+
+def save_persistent_state():
+    state = {
+        "last_opened_folder": st.session_state.get("last_opened_folder", ""),
+        "last_opened_config": st.session_state.get("last_opened_config", ""),
+        "last_opened_template": st.session_state.get("last_opened_template", ""),
+        "pm_folder_path": st.session_state.get("pm_folder_path", ""),
+        "editor_config_path": st.session_state.get("editor_config_path", ""),
+        "editor_template_path": st.session_state.get("editor_template_path", "")
+    }
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
+load_persistent_state()
 
 def generate_docx_preview(template_path, variables, config_path=None):
     """Generates a temporary Word document and extracts its content for quick preview in high-fidelity HTML."""
@@ -1303,21 +1345,67 @@ views_list = [
     "📖 Повна Довідка"
 ]
 
-if "current_view" not in st.session_state:
-    st.session_state["current_view"] = views_list[0]
+if "app_view_selector" not in st.session_state or st.session_state["app_view_selector"] not in views_list:
+    if "current_view" in st.session_state and st.session_state["current_view"] in views_list:
+        st.session_state["app_view_selector"] = st.session_state["current_view"]
+    else:
+        st.session_state["app_view_selector"] = views_list[0]
 
-# Ensure session state value matches index securely
-default_view_index = 0
-if st.session_state["current_view"] in views_list:
-    default_view_index = views_list.index(st.session_state["current_view"])
+# Determine default index from session state to avoid key parameter conflicts in Streamlit selectbox
+try:
+    default_idx = views_list.index(st.session_state["app_view_selector"])
+except Exception:
+    default_idx = 0
 
 selected_view = st.selectbox(
     "Оберіть розділ роботи:",
     views_list,
-    index=default_view_index,
-    key="app_view_selector"
+    index=default_idx
 )
+st.session_state["app_view_selector"] = selected_view
 st.session_state["current_view"] = selected_view
+
+# Track view transitions
+prev_view = st.session_state.get("prev_view")
+if prev_view is None:
+    st.session_state["prev_view"] = selected_view
+    prev_view = selected_view
+
+if prev_view != selected_view:
+    # Transitioning
+    if prev_view == "📝 Редактор Excel Конфігів":
+        # Leaving Config Editor: Save state
+        if st.session_state.get("editor_config_path"):
+            st.session_state["last_opened_config"] = st.session_state["editor_config_path"]
+            st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(st.session_state["editor_config_path"]))
+            st.session_state["pm_folder_path"] = st.session_state["last_opened_folder"]
+        if st.session_state.get("editor_template_path"):
+            st.session_state["last_opened_template"] = st.session_state["editor_template_path"]
+        save_persistent_state()
+        
+    elif selected_view == "📝 Редактор Excel Конфігів":
+        # Entering Config Editor: Restore state and force reload
+        if st.session_state.get("last_opened_config"):
+            st.session_state["editor_config_path"] = st.session_state["last_opened_config"]
+        if st.session_state.get("last_opened_template"):
+            st.session_state["editor_template_path"] = st.session_state["last_opened_template"]
+        # Force reload config sheet data to get latest values
+        st.session_state["loaded_config_sheet"] = ""
+        save_persistent_state()
+        
+    elif selected_view == "Менеджер Проектів":
+        # Entering Project Manager
+        if st.session_state.get("last_opened_folder"):
+            st.session_state["pm_folder_path"] = st.session_state["last_opened_folder"]
+        save_persistent_state()
+        
+    elif selected_view == "⚡ Генерація Документів":
+        # Entering Document Generation
+        if st.session_state.get("last_opened_config"):
+            st.session_state["gen_config_path"] = st.session_state["last_opened_config"]
+        save_persistent_state()
+        
+    st.session_state["prev_view"] = selected_view
 
 st.markdown(" ")
 
@@ -1349,6 +1437,9 @@ if selected_view == "Менеджер Проектів":
         st.button("📁 Обрати папку", key="btn_pm_folder", on_click=select_pm_folder)
         
     pm_path = st.session_state["pm_folder_path"]
+    if pm_path and pm_path != st.session_state.get("last_opened_folder"):
+        st.session_state["last_opened_folder"] = pm_path
+        save_persistent_state()
     
     if not pm_path:
         st.info("Будь ласка, оберіть або введіть шлях до папки для сканування.")
@@ -1425,6 +1516,10 @@ if selected_view == "Менеджер Проектів":
                                                 "template_path": template_path,
                                                 "name_pattern": name_pattern
                                             }
+                                            st.session_state["last_opened_config"] = config_path
+                                            st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(config_path))
+                                            st.session_state["last_opened_template"] = template_path
+                                            save_persistent_state()
                                             if "pm_editing_vars" in st.session_state:
                                                 del st.session_state["pm_editing_vars"]
                                             st.rerun()
@@ -1526,6 +1621,12 @@ if selected_view == "Менеджер Проектів":
                                 st.session_state["editor_selected_sheet"] = sheet_name
                                 st.session_state["widget_editor_sheet"] = sheet_name
                                 st.session_state["loaded_config_sheet"] = ""  # Force reload headers and data
+                                # Update last opened values immediately on transition
+                                st.session_state["last_opened_config"] = config_path
+                                st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(config_path))
+                                if template_path:
+                                    st.session_state["last_opened_template"] = template_path
+                                save_persistent_state()
                             st.button("✏️ Перейти до редактора конфігів", use_container_width=True, on_click=go_to_config_editor)
                                 
                         # High fidelity preview
@@ -1764,6 +1865,11 @@ elif selected_view == "📝 Редактор Excel Конфігів":
         st.button("📁 Обрати конфіг", key="btn_editor_config", on_click=select_editor_config)
         
     cfg_path = st.session_state["editor_config_path"]
+    if cfg_path and (cfg_path != st.session_state.get("last_opened_config") or os.path.dirname(os.path.abspath(cfg_path)) != st.session_state.get("last_opened_folder")):
+        st.session_state["last_opened_config"] = cfg_path
+        st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(cfg_path))
+        st.session_state["pm_folder_path"] = st.session_state["last_opened_folder"]
+        save_persistent_state()
     if not cfg_path:
         st.info("Будь ласка, оберіть файл конфігурації Excel (`*.xlsx`) для початку роботи!")
     elif not os.path.exists(cfg_path):
@@ -1845,6 +1951,9 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                 st.session_state["current_sheet_data"] = list(sheet_info["rows"])
                 st.session_state["editor_template_path"] = sheet_info["template_path"]
                 st.session_state["editor_name_pattern"] = sheet_info["name_pattern"]
+                if sheet_info["template_path"]:
+                    st.session_state["last_opened_template"] = sheet_info["template_path"]
+                save_persistent_state()
                 
             # --- METADATA (A1 & A2) ---
             st.markdown("### ⚙️ Налаштування генерації для обраного аркуша")
@@ -1878,6 +1987,12 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                     placeholder="Наприклад: output_{{YYYY}}.docx",
                     key="editor_name_pattern"
                 )
+                
+            # Sync template path to last_opened_template immediately if changed
+            curr_editor_t_path = st.session_state.get("editor_template_path", "")
+            if curr_editor_t_path and curr_editor_t_path != st.session_state.get("last_opened_template", ""):
+                st.session_state["last_opened_template"] = curr_editor_t_path
+                save_persistent_state()
                 
             # --- SLEEK ROW & COLUMN CONTROLS ---
             st.markdown("### 🛠️ Швидкі дії з рядками та стовпчиками (змінними)")
@@ -2171,9 +2286,19 @@ elif selected_view == "⚡ Генерація Документів":
                 st.session_state["gen_config_path"] = selected
         st.button("📁 Обрати конфіг", key="btn_gen_config", on_click=select_gen_config)
         
-    pass
-            
+    # Sync document generation path to last_opened state if it changes
     g_path = st.session_state["gen_config_path"]
+    if g_path:
+        try:
+            abs_g_path = os.path.abspath(g_path)
+            g_folder = os.path.dirname(abs_g_path)
+            if g_path != st.session_state.get("last_opened_config") or g_folder != st.session_state.get("last_opened_folder"):
+                st.session_state["last_opened_config"] = g_path
+                st.session_state["last_opened_folder"] = g_folder
+                st.session_state["pm_folder_path"] = g_folder
+                save_persistent_state()
+        except Exception:
+            pass
     
     # --- ALWAYS-VISIBLE OUTPUT DIRECTORY SELECTION ---
     st.markdown("##### 📁 Папка для збереження готових документів (Необов'язково)")
