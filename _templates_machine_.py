@@ -179,14 +179,18 @@ def save_excel_config(filepath, sheet_name, template_path, name_pattern, headers
     sheet.cell(row=1, column=1).value = template_path
     sheet.cell(row=2, column=1).value = name_pattern
     
-    # 2. Update headers in Row 4
-    for col_idx, h in enumerate(headers):
-        sheet.cell(row=4, column=col_idx + 1).value = h
+    # 2. Update headers in Row 4 and clear deleted ones
+    max_c = max(sheet.max_column, len(headers))
+    for c_idx in range(1, max_c + 1):
+        if c_idx <= len(headers):
+            sheet.cell(row=4, column=c_idx).value = headers[c_idx - 1]
+        else:
+            sheet.cell(row=4, column=c_idx).value = None
         
-    # 3. Clear old data rows from Row 5 onwards
+    # 3. Clear old data rows from Row 5 onwards up to max_column
     max_r = max(sheet.max_row, 5)
     for r in range(5, max_r + 1):
-        for c in range(1, len(headers) + 1):
+        for c in range(1, max_c + 1):
             sheet.cell(row=r, column=c).value = None
             
     # 4. Write new data rows
