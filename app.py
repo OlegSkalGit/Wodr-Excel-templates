@@ -17,9 +17,307 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
 
 # Configure page layout and style
+import json
+STATE_FILE = ".last_state.json"
+_cached_file_state = None
+
+def get_persisted_state_dict():
+    global _cached_file_state
+    if _cached_file_state is not None:
+        return _cached_file_state
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                _cached_file_state = json.load(f)
+                return _cached_file_state
+        except Exception:
+            pass
+    _cached_file_state = {}
+    return _cached_file_state
+
+def init_state_key(key, default_value):
+    if key in st.session_state:
+        return
+    state = get_persisted_state_dict()
+    if key in state and state[key] is not None:
+        st.session_state[key] = state[key]
+    else:
+        st.session_state[key] = default_value
+
+def load_persistent_state():
+    global _cached_file_state
+    _cached_file_state = None
+    state = get_persisted_state_dict()
+    for k, v in state.items():
+        if v is not None:
+            st.session_state[k] = v
+    st.session_state["pm_cached_configs"] = {}
+    if "sync_pm_editing_vars" in globals():
+        sync_pm_editing_vars()
+
+def make_json_serializable(obj):
+    import math
+    from datetime import datetime, date
+    
+    if obj is None:
+        return None
+    if isinstance(obj, (bool, str, int)):
+        return obj
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return str(obj)
+        return obj
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {str(k): make_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_serializable(v) for v in obj]
+    
+    # Try checking if pandas is installed and if obj is a dataframe/series or NaT/NaN
+    try:
+        import pandas as pd
+        if isinstance(obj, (pd.DataFrame, pd.Series)):
+            return make_json_serializable(obj.to_dict())
+        if pd.isna(obj):
+            return None
+    except ImportError:
+        pass
+
+    # Try checking if numpy is installed
+    try:
+        import numpy as np
+        if isinstance(obj, (np.integer, np.floating)):
+            return make_json_serializable(obj.item())
+        if isinstance(obj, np.ndarray):
+            return make_json_serializable(obj.tolist())
+    except ImportError:
+        pass
+
+    # Fallback to string representation if all else fails
+    try:
+        json.dumps(obj)
+        return obj
+    except TypeError:
+        return str(obj)
+
+def save_persistent_state():
+    # Load the existing persisted state to avoid overwriting unrendered views' data with empty defaults
+    state = dict(get_persisted_state_dict())
+    
+    tracked_keys = [
+        "theme",
+        "current_view",
+        "last_opened_folder",
+        "last_opened_config",
+        "last_opened_template",
+        "pm_folder_path",
+        "editor_config_path",
+        "editor_template_path",
+        "editor_name_pattern",
+        "pm_selected_doc",
+        "analysis_mode",
+        "analysis_output_dir",
+        "txt_auto_folder",
+        "txt_batch_sample",
+        "txt_batch_folder",
+        "txt_pair_file1",
+        "txt_pair_file2",
+        "editor_selected_sheet",
+        "gen_config_path",
+        "gen_output_dir",
+        "pm_only_docs",
+        "loaded_config_sheet",
+        "current_sheet_headers",
+        "current_sheet_data",
+        "last_preview_row_idx",
+        "loaded_gen_sheet",
+        "gen_sheet_select",
+        "gen_template_path",
+        "gen_row_select",
+        "pm_editing_vars",
+        "pending_template_renames",
+        "pm_loaded_doc_key",
+        "gen_completion_status"
+    ]
+    
+    for key in tracked_keys:
+        if key in st.session_state:
+            state[key] = make_json_serializable(st.session_state[key])
+            
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=4)
+        global _cached_file_state
+        _cached_file_state = state
+    except Exception as e:
+        try:
+            import traceback
+            with open("save_error.log", "w", encoding="utf-8") as f:
+                traceback.print_exc(file=f)
+        except Exception:
+            pass
+
+def load_excel_config(filepath):
+    """Loads all worksheets from Excel config safely parsing metadata (A1 and A2), imported from core."""
+    from _templates_machine_ import load_excel_config as core_load
+    try:
+        return core_load(filepath)
+    except Exception as e:
+        st.error(f"Помилка при завантаженні конфігу {filepath}: {e}")
+        return None
+
+def get_cached_config(config_path):
+    """Retrieves config data from cache or loads it if stale/missing."""
+    if "pm_cached_configs" not in st.session_state:
+        st.session_state["pm_cached_configs"] = {}
+        
+    try:
+        mtime = os.path.getmtime(config_path)
+    except Exception:
+        mtime = 0
+        
+    cache_entry = st.session_state["pm_cached_configs"].get(config_path)
+    if cache_entry and cache_entry.get("mtime") == mtime:
+        return cache_entry["data"]
+        
+    data = load_excel_config(config_path)
+    if data:
+        st.session_state["pm_cached_configs"][config_path] = {
+            "mtime": mtime,
+            "data": data
+        }
+    return data
+
+def sync_pm_editing_vars():
+    """Reloads the editing variables for the selected Project Manager document from the disk config file."""
+    selected_doc = st.session_state.get("pm_selected_doc")
+    if selected_doc:
+        config_path = selected_doc.get("config_path")
+        sheet_name = selected_doc.get("sheet_name")
+        row_idx = selected_doc.get("row_idx")
+        if config_path and sheet_name and row_idx is not None:
+            current_doc_key = f"{config_path}_{sheet_name}_{row_idx}"
+            loaded_doc_key = st.session_state.get("pm_loaded_doc_key")
+            
+            if current_doc_key != loaded_doc_key or st.session_state.get("pm_editing_vars") is None:
+                if "pm_cached_configs" not in st.session_state:
+                    st.session_state["pm_cached_configs"] = {}
+                if config_path in st.session_state["pm_cached_configs"]:
+                    del st.session_state["pm_cached_configs"][config_path]
+                sheets_data = get_cached_config(config_path)
+                if sheets_data and sheet_name in sheets_data:
+                    rows = sheets_data[sheet_name].get("rows", [])
+                    if row_idx < len(rows):
+                        st.session_state["pm_editing_vars"] = dict(rows[row_idx])
+                        st.session_state["pm_loaded_doc_key"] = current_doc_key
+                        save_persistent_state()
+
+def sync_data_editor_states():
+    """Synchronizes data editor widget states (cells and headers) into session state dynamically on every rerun, ensuring unsaved edits are preserved."""
+    if "current_sheet_data" in st.session_state and "current_sheet_headers" in st.session_state:
+        cfg_path = st.session_state.get("editor_config_path", "")
+        selected_sheet = st.session_state.get("editor_selected_sheet", "")
+        if cfg_path and selected_sheet:
+            clean_cfg_path = "".join([c if c.isalnum() else "_" for c in cfg_path])
+            config_key = f"config_data_editor_{clean_cfg_path}_{selected_sheet}"
+            headers_key = f"headers_data_editor_{clean_cfg_path}_{selected_sheet}"
+        else:
+            config_key = "config_data_editor"
+            headers_key = "headers_data_editor"
+
+        # 1. Sync config_data_editor (rows)
+        if config_key in st.session_state and st.session_state[config_key] is not None:
+            editor_state = st.session_state[config_key]
+            
+            # Sync edited cells
+            edited_rows = editor_state.get("edited_rows", {})
+            for row_idx_str, edits in edited_rows.items():
+                row_idx = int(row_idx_str)
+                if row_idx < len(st.session_state["current_sheet_data"]):
+                    for col, val in edits.items():
+                        if col == "Перегляд":
+                            if val is True:
+                                st.session_state["last_preview_row_idx"] = row_idx
+                            elif val is False and st.session_state.get("last_preview_row_idx") == row_idx:
+                                st.session_state["last_preview_row_idx"] = None
+                        elif col in st.session_state["current_sheet_headers"]:
+                            st.session_state["current_sheet_data"][row_idx][col] = str(val)
+                            
+            # Sync added rows
+            added_rows = editor_state.get("added_rows", [])
+            for row in added_rows:
+                new_row = {h: str(row.get(h, "")) for h in st.session_state["current_sheet_headers"]}
+                st.session_state["current_sheet_data"].append(new_row)
+                
+            # Sync deleted rows
+            deleted_rows = editor_state.get("deleted_rows", [])
+            for row_idx in sorted(deleted_rows, reverse=True):
+                if row_idx < len(st.session_state["current_sheet_data"]):
+                    st.session_state["current_sheet_data"].pop(row_idx)
+
+            # Clear changes to prevent double-processing
+            if isinstance(st.session_state.get(config_key), dict):
+                st.session_state[config_key].setdefault("edited_rows", {}).clear()
+                st.session_state[config_key].setdefault("added_rows", []).clear()
+                st.session_state[config_key].setdefault("deleted_rows", []).clear()
+
+        # 2. Sync headers_data_editor (headers)
+        if headers_key in st.session_state and st.session_state[headers_key] is not None:
+            h_editor_state = st.session_state[headers_key]
+            edited_rows = h_editor_state.get("edited_rows", {})
+            for row_idx_str, edits in edited_rows.items():
+                row_idx = int(row_idx_str)
+                if row_idx < len(st.session_state["current_sheet_headers"]):
+                    orig = st.session_state["current_sheet_headers"][row_idx]
+                    new_val = edits.get("Нова назва змінної", "").strip()
+                    if new_val and new_val != orig:
+                        if new_val not in st.session_state["current_sheet_headers"]:
+                            # update header
+                            st.session_state["current_sheet_headers"][row_idx] = new_val
+                            # update row keys
+                            for row in st.session_state["current_sheet_data"]:
+                                if orig in row:
+                                    row[new_val] = row.pop(orig)
+                            # queue rename
+                            if "pending_template_renames" not in st.session_state:
+                                st.session_state["pending_template_renames"] = []
+                            st.session_state["pending_template_renames"].append((orig, new_val))
+                        else:
+                            st.toast(f"⚠️ Змінна '{new_val}' вже існує!", icon="⚠️")
+
+            # Clear changes to prevent double-processing
+            if isinstance(st.session_state.get(headers_key), dict):
+                st.session_state[headers_key].setdefault("edited_rows", {}).clear()
+
+def sync_pm_inputs():
+    """Synchronizes dynamic Project Manager variable inputs into st.session_state['pm_editing_vars']
+    immediately at the start of execution, so changes are not lost during interrupted runs (like theme changes)."""
+    selected_doc = st.session_state.get("pm_selected_doc")
+    if selected_doc and isinstance(st.session_state.get("pm_editing_vars"), dict):
+        config_path = selected_doc.get("config_path")
+        sheet_name = selected_doc.get("sheet_name")
+        row_idx = selected_doc.get("row_idx")
+        if config_path and sheet_name and row_idx is not None:
+            prefix = f"pm_input_{config_path}_{sheet_name}_{row_idx}_"
+            edited_vars = st.session_state["pm_editing_vars"]
+            changed = False
+            for key in list(st.session_state.keys()):
+                if key.startswith(prefix):
+                    var_name = key[len(prefix):]
+                    new_val = st.session_state[key]
+                    if edited_vars.get(var_name) != new_val:
+                        edited_vars[var_name] = new_val
+                        changed = True
+            if changed:
+                save_persistent_state()
+
 # Initialize session state variables
-if "theme" not in st.session_state:
-    st.session_state["theme"] = "light"
+init_state_key("theme", "light")
+if "state_loaded" not in st.session_state or st.session_state.get("theme_changed"):
+    load_persistent_state()
+    st.session_state["state_loaded"] = True
+    st.session_state["theme_changed"] = False
 
 theme = st.session_state["theme"]
 
@@ -273,16 +571,101 @@ st.markdown(f"""
         color: #ffffff !important;
     }}
     
-    /* Details & Expanders */
-    .streamlit-expanderHeader, details {{
-        background-color: {card_bg} !important;
-        color: {text_color} !important;
-        border-color: {card_border} !important;
+    /* Document Preview Container (Sheet/Word) Overrides */
+    div.document-preview-container,
+    div.document-preview-container *,
+    div.word-preview-container,
+    div.word-preview-container *,
+    .document-preview-container p,
+    .document-preview-container span,
+    .document-preview-container td,
+    .document-preview-container th,
+    .document-preview-container tr,
+    .document-preview-container table,
+    .document-preview-container h1,
+    .document-preview-container h2,
+    .document-preview-container h3,
+    .document-preview-container h4,
+    .document-preview-container h5,
+    .document-preview-container h6,
+    .document-preview-container li,
+    .document-preview-container ul,
+    .word-preview-container p,
+    .word-preview-container span,
+    .word-preview-container td,
+    .word-preview-container th,
+    .word-preview-container tr,
+    .word-preview-container table,
+    .word-preview-container h1,
+    .word-preview-container h2,
+    .word-preview-container h3,
+    .word-preview-container h4,
+    .word-preview-container h5,
+    .word-preview-container h6,
+    .word-preview-container li,
+    .word-preview-container ul {{
+        color: #1a202c !important;
     }}
-    .streamlit-expanderContent {{
-        background-color: {popover_bg} !important;
+    div.document-preview-container,
+    div.word-preview-container,
+    div.document-preview-container div,
+    div.word-preview-container div {{
+        background-color: #ffffff !important;
+    }}
+    
+    /* Details & Expanders */
+    div[data-testid="stExpander"] {{
+        background-color: {card_bg} !important;
+        border: 1px solid {card_border} !important;
+        border-radius: 8px !important;
+        margin-bottom: 0.5rem !important;
+    }}
+    
+    /* Force details and open details to be transparent to show the wrapper card background */
+    div[data-testid="stExpander"] details,
+    div[data-testid="stExpander"] details[open],
+    div[data-testid="stExpander"] summary,
+    div[data-testid="stExpander"] div[role="region"],
+    div[data-testid="stExpander"] [data-testid="stExpanderDetails"],
+    div[data-testid="stExpander"] .streamlit-expanderContent,
+    div[data-testid="stExpander"] div[role="region"] [data-testid="stVerticalBlock"] {{
+        background-color: transparent !important;
+        background: transparent !important;
+        border: none !important;
+    }}
+    
+    /* Make sure all descendant container divs inside the expander are transparent,
+       excluding actual widgets like input fields, selectboxes, buttons, alerts and nested expanders */
+    div[data-testid="stExpander"] div[role="region"] div:not(.stTextInput):not(.stSelectbox):not(.stTextArea):not(.stButton):not(.stNumberInput):not(.stMultiSelect):not([data-testid="stExpander"]):not(.stAlert):not([data-testid="stAlert"]) {{
+        background-color: transparent !important;
+        background: transparent !important;
+    }}
+    
+    /* Summary headers inside expanders */
+    div[data-testid="stExpander"] > details > summary,
+    div[data-testid="stExpander"] > details > summary * {{
+        background-color: transparent !important;
         color: {text_color} !important;
-        border-color: {card_border} !important;
+    }}
+    
+    /* Make sure nested expanders restore their background and don't remain transparent */
+    div[data-testid="stExpander"] div[role="region"] div[data-testid="stExpander"] {{
+        background-color: {card_bg} !important;
+        border: 1px solid {card_border} !important;
+    }}
+    
+    /* Scoped styling for help page when the marker is present in DOM */
+    div[data-testid="stMainBlockContainer"]:has(.help-page-marker),
+    .block-container:has(.help-page-marker) {{
+        background: {card_bg} !important;
+        backdrop-filter: blur(10px) !important;
+        -webkit-backdrop-filter: blur(10px) !important;
+        border: 1px solid {card_border} !important;
+        border-radius: 16px !important;
+        box-shadow: 0 8px 32px 0 {shadow_color} !important;
+        padding: 3rem !important;
+        margin-top: 1.5rem !important;
+        margin-bottom: 2.5rem !important;
     }}
     
     /* Responsive Theme Toggle */
@@ -477,6 +860,146 @@ def build_dir_tree(config_files, root_path):
         current[parts[-1]] = path
     return tree
 
+def build_docs_only_tree(config_files, root_path):
+    """Builds a virtual tree where documents are grouped directly under folder structures,
+    skipping config files and sheets nodes."""
+    tree = {}
+    abs_root_path = os.path.abspath(root_path)
+    
+    for path in config_files:
+        abs_config_path = os.path.abspath(path)
+        config_dir = os.path.dirname(abs_config_path)
+            
+        sheets_data = get_cached_config(abs_config_path)
+        if not sheets_data:
+            continue
+            
+        for sheet_name, info in sheets_data.items():
+            rows = info.get("rows", [])
+            template_path = info.get("template_path", "")
+            name_pattern = info.get("name_pattern", "")
+            
+            for idx, row in enumerate(rows):
+                is_selected = (
+                    st.session_state.get("pm_selected_doc", {}).get("config_path") == abs_config_path and
+                    st.session_state.get("pm_selected_doc", {}).get("sheet_name") == sheet_name and
+                    st.session_state.get("pm_selected_doc", {}).get("row_idx") == idx
+                )
+                current_row_vars = row
+                if is_selected and st.session_state.get("pm_editing_vars") is not None:
+                    current_row_vars = st.session_state["pm_editing_vars"]
+                
+                doc_name = resolve_virtual_doc_name(name_pattern, current_row_vars, template_path)
+                if not doc_name.strip():
+                    doc_name = f"document_{idx + 1}"
+                
+                # Resolve absolute path of the document
+                if os.path.isabs(doc_name):
+                    abs_doc_path = os.path.abspath(doc_name)
+                else:
+                    abs_doc_path = os.path.abspath(os.path.join(config_dir, doc_name))
+                    
+                abs_doc_dir = os.path.dirname(abs_doc_path)
+                
+                # Determine relative folder directory to root_path
+                try:
+                    rel_doc_dir = os.path.relpath(abs_doc_dir, abs_root_path)
+                    norm_rel = rel_doc_dir.replace("\\", "/")
+                    rel_parts = [p for p in norm_rel.split("/") if p]
+                    # If it goes outside the root (starts with '..') or is absolute, use absolute path
+                    if (rel_parts and rel_parts[0] == "..") or os.path.isabs(rel_doc_dir):
+                        rel_doc_dir = abs_doc_dir
+                except ValueError:
+                    rel_doc_dir = abs_doc_dir
+                
+                # Normalize separators for path splitting
+                rel_doc_dir = rel_doc_dir.replace("\\", "/")
+                
+                if rel_doc_dir == "." or not rel_doc_dir:
+                    parts = []
+                else:
+                    parts = rel_doc_dir.split("/")
+                    parts = [p for p in parts if p and p != "."]
+                    
+                doc_info = {
+                    "config_path": abs_config_path,
+                    "sheet_name": sheet_name,
+                    "row_idx": idx,
+                    "doc_name": doc_name,
+                    "template_path": template_path,
+                    "name_pattern": name_pattern
+                }
+                
+                current = tree
+                for part in parts:
+                    if part not in current:
+                        current[part] = {}
+                    current = current[part]
+                
+                if "__docs__" not in current:
+                    current["__docs__"] = []
+                current["__docs__"].append(doc_info)
+                
+    return tree
+
+def render_docs_only_tree(tree, depth=0, path_prefix=""):
+    selected_doc = st.session_state.get("pm_selected_doc")
+    if selected_doc:
+        config_path_clean = "".join([c if c.isalnum() else "_" for c in selected_doc.get('config_path', '')])
+        selected_doc_id = f"{config_path_clean}_{selected_doc.get('sheet_name')}_{selected_doc.get('row_idx')}"
+    else:
+        selected_doc_id = "none"
+    target_config = selected_doc.get("config_path") if selected_doc else None
+    
+    # 1. Render subfolders
+    for key, value in tree.items():
+        if key == "__docs__":
+            continue
+        def contains_selected(folder_dict):
+            if "__docs__" in folder_dict:
+                for doc in folder_dict["__docs__"]:
+                    if target_config and os.path.abspath(doc["config_path"]).lower() == os.path.abspath(target_config).lower():
+                        if selected_doc.get("sheet_name") == doc["sheet_name"] and selected_doc.get("row_idx") == doc["row_idx"]:
+                            return True
+            for k, v in folder_dict.items():
+                if k != "__docs__" and isinstance(v, dict):
+                    if contains_selected(v):
+                        return True
+            return False
+            
+        should_expand = (depth == 0) or (selected_doc and contains_selected(value))
+        exp_key = f"pm_docs_only_exp_{path_prefix}_{key}_{selected_doc_id}"
+        with st.expander("📁 " + key, expanded=should_expand, key=exp_key):
+            render_docs_only_tree(value, depth + 1, path_prefix=f"{path_prefix}_{key}")
+            
+    # 2. Render files (documents) in the current folder
+    if "__docs__" in tree:
+        for doc in tree["__docs__"]:
+            is_selected = (
+                selected_doc and
+                selected_doc.get("config_path") == doc["config_path"] and
+                selected_doc.get("sheet_name") == doc["sheet_name"] and
+                selected_doc.get("row_idx") == doc["row_idx"]
+            )
+            button_type = "primary" if is_selected else "secondary"
+            if st.button(
+                f"📄 {os.path.basename(doc['doc_name'])}",
+                key=f"pm_doc_btn_{doc['config_path']}_{doc['sheet_name']}_{doc['row_idx']}",
+                use_container_width=True,
+                type=button_type
+            ):
+                st.session_state["pm_selected_doc"] = doc
+                st.session_state["last_opened_config"] = doc["config_path"]
+                st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(doc["config_path"]))
+                st.session_state["last_opened_template"] = doc["template_path"]
+                st.session_state["pending_download"] = None
+                clear_pm_input_keys()
+                save_persistent_state()
+                st.session_state["pm_editing_vars"] = None
+                save_persistent_state()
+                st.rerun()
+
+
 def resolve_virtual_doc_name(pattern, row_data, template_path):
     """Resolves output document name using date/time variables and row data."""
     from datetime import datetime
@@ -565,13 +1088,13 @@ def save_generated_document_dialog(template_path, variables, config_path, name_p
             with open(temp_file, "rb") as f:
                 file_bytes = f.read()
                 
-            st.download_button(
-                label="⬇️ Завантажити згенерований документ через браузер",
-                data=file_bytes,
-                file_name=proposed_filename,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="pm_download_fallback_btn"
-            )
+            st.session_state["pending_download"] = {
+                "bytes": file_bytes,
+                "name": proposed_filename,
+                "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == ".docx" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            }
+            save_persistent_state()
+            st.rerun()
         except Exception as e_gen:
             st.error(f"Помилка генерації документа: {e_gen}")
 
@@ -598,37 +1121,6 @@ def scan_workspace():
 # ----------------------------------------------------
 # EXCEL CONFIG READ/WRITE WITH OPENPYXL
 # ----------------------------------------------------
-
-def get_cached_config(config_path):
-    """Retrieves config data from cache or loads it if stale/missing."""
-    if "pm_cached_configs" not in st.session_state:
-        st.session_state["pm_cached_configs"] = {}
-        
-    try:
-        mtime = os.path.getmtime(config_path)
-    except Exception:
-        mtime = 0
-        
-    cache_entry = st.session_state["pm_cached_configs"].get(config_path)
-    if cache_entry and cache_entry.get("mtime") == mtime:
-        return cache_entry["data"]
-        
-    data = load_excel_config(config_path)
-    if data:
-        st.session_state["pm_cached_configs"][config_path] = {
-            "mtime": mtime,
-            "data": data
-        }
-    return data
-
-def load_excel_config(filepath):
-    """Loads all worksheets from Excel config safely parsing metadata (A1 and A2), imported from core."""
-    from _templates_machine_ import load_excel_config as core_load
-    try:
-        return core_load(filepath)
-    except Exception as e:
-        st.error(f"Помилка при завантаженні конфігу {filepath}: {e}")
-        return None
 
 def save_excel_config(filepath, sheet_name, template_path, name_pattern, headers, df_data):
     """Saves changes back to Excel config safely preserving other sheets, imported from core."""
@@ -708,11 +1200,12 @@ def run_subprocess_and_stream(args):
     if process.returncode == 0:
         progress_bar.progress(1.0)
         st.session_state["last_operation_status"] = "success"
-        st.success("🎉 Завдання успішно виконано!")
-        st.balloons()
+        st.session_state["trigger_balloons"] = True
+        st.session_state["gen_completion_status"] = "success"
     else:
         st.session_state["last_operation_status"] = "error"
-        st.error(f"❌ Помилка виконання! Код завершення: {process.returncode}")
+        st.session_state["trigger_balloons"] = False
+        st.session_state["gen_completion_status"] = "error"
         
     return process.returncode, logs
 
@@ -726,10 +1219,17 @@ def show_last_operation_logs():
         status = st.session_state.get("last_operation_status", "")
         cmd = st.session_state.get("last_operation_cmd", "")
         
+        # Trigger balloons only once
+        if st.session_state.get("trigger_balloons"):
+            st.balloons()
+            st.session_state["trigger_balloons"] = False
+            
         st.markdown("---")
         if status == "success":
+            st.success("🎉 Завдання успішно виконано!")
             st.markdown("### 🟢 Результат останньої операції: Успішно")
         elif status == "error":
+            st.error(f"❌ Помилка виконання завдання!")
             st.markdown("### 🔴 Результат останньої операції: Помилка")
         else:
             st.markdown("### 🟡 Результат останньої операції: Виконується")
@@ -878,50 +1378,39 @@ def move_pairwise_outputs(file1_path, dest_dir):
 for key in [
     "txt_auto_folder", "txt_batch_sample", "txt_batch_folder", 
     "txt_pair_file1", "txt_pair_file2", "editor_config_path", 
+    "editor_template_path", "editor_name_pattern",
     "gen_config_path", "gen_output_dir", "analysis_output_dir",
-    "last_operation_logs", "last_operation_status", "last_operation_cmd",
     "last_opened_folder", "last_opened_config", "last_opened_template",
-    "pm_folder_path"
+    "pm_folder_path", "analysis_mode", "editor_selected_sheet", "current_view",
+    "loaded_config_sheet", "loaded_gen_sheet", "gen_template_path"
 ]:
-    if key not in st.session_state:
-        if key == "last_operation_logs":
-            st.session_state[key] = []
-        elif key in ["last_operation_status", "last_operation_cmd"]:
-            st.session_state[key] = None if key == "last_operation_status" else ""
-        else:
-            st.session_state[key] = ""
+    init_state_key(key, "")
 
-# Load/Save persistent state to maintain context across restarts
-import json
-STATE_FILE = ".last_state.json"
+init_state_key("gen_sheet_select", "all (Всі аркуші)")
+init_state_key("gen_row_select", "all (Всі рядки з даними)")
+init_state_key("pm_only_docs", False)
+init_state_key("last_operation_logs", [])
+init_state_key("last_operation_status", None)
+init_state_key("last_operation_cmd", "")
+init_state_key("pm_selected_doc", None)
+init_state_key("current_sheet_headers", [])
+init_state_key("current_sheet_data", [])
+init_state_key("last_preview_row_idx", 0)
+init_state_key("pm_editing_vars", None)
+init_state_key("pending_template_renames", [])
+init_state_key("pm_loaded_doc_key", "")
+init_state_key("gen_completion_status", None)
+init_state_key("last_gen_params", "")
 
-def load_persistent_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                state = json.load(f)
-                for k, v in state.items():
-                    if v is not None:
-                        st.session_state[k] = v
-        except Exception:
-            pass
+def clear_pm_input_keys():
+    """Removes all keys starting with pm_input_ from session state to force refreshing inputs."""
+    keys_to_del = [k for k in st.session_state.keys() if k.startswith("pm_input_")]
+    for k in keys_to_del:
+        del st.session_state[k]
 
-def save_persistent_state():
-    state = {
-        "last_opened_folder": st.session_state.get("last_opened_folder", ""),
-        "last_opened_config": st.session_state.get("last_opened_config", ""),
-        "last_opened_template": st.session_state.get("last_opened_template", ""),
-        "pm_folder_path": st.session_state.get("pm_folder_path", ""),
-        "editor_config_path": st.session_state.get("editor_config_path", ""),
-        "editor_template_path": st.session_state.get("editor_template_path", "")
-    }
-    try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=4)
-    except Exception:
-        pass
-
-load_persistent_state()
+# Sync data editor states immediately on every run
+sync_data_editor_states()
+sync_pm_inputs()
 
 def generate_docx_preview(template_path, variables, config_path=None):
     """Generates a temporary Word document and extracts its content for quick preview in high-fidelity HTML."""
@@ -937,7 +1426,7 @@ def generate_docx_preview(template_path, variables, config_path=None):
     actual_path = resolve_path(cfg_dir, template_path)
             
     if not os.path.exists(actual_path):
-        return f"<div style='color: red; font-weight: bold;'>Шаблон не знайдено за шляхом: {template_path}</div>"
+        return f"<div style='color: red !important; font-weight: bold;'>Шаблон не знайдено за шляхом: {template_path}</div>"
         
     temp_dir = tempfile.gettempdir()
     temp_out = os.path.join(temp_dir, "temp_preview.docx")
@@ -947,17 +1436,17 @@ def generate_docx_preview(template_path, variables, config_path=None):
         doc = Document(temp_out)
         
         html = []
-        html.append("<div style='font-family: \"Times New Roman\", Times, serif; color: #1a202c; max-width: 800px; margin: 0 auto; line-height: 1.5; font-size: 14px;'>")
+        html.append("<div class='word-preview-container' style='font-family: \"Times New Roman\", Times, serif; color: #1a202c !important; max-width: 800px; margin: 0 auto; line-height: 1.5; font-size: 14px; background-color: #ffffff !important;'>")
+        
+        # Pre-map paragraphs and tables to speed up lookup to O(1)
+        p_map = {p._p: p for p in doc.paragraphs}
+        t_map = {t._tbl: t for t in doc.tables}
         
         # Traverse paragraphs and tables in order
         for element in doc.element.body:
             if element.tag.endswith('p'):
                 # It's a paragraph
-                paragraph = None
-                for p in doc.paragraphs:
-                    if p._p == element:
-                        paragraph = p
-                        break
+                paragraph = p_map.get(element)
                 if paragraph:
                     style_str = []
                     
@@ -995,6 +1484,9 @@ def generate_docx_preview(template_path, variables, config_path=None):
                     else:
                         style_str.append("line-height: 1.15;")
                         
+                    # Ensure legibility in dark theme by adding explicit color
+                    style_str.append("color: #1a202c !important;")
+                    
                     # Write <p> tag
                     html.append(f"<p style='{' '.join(style_str)}'>")
                     for run in paragraph.runs:
@@ -1011,7 +1503,9 @@ def generate_docx_preview(template_path, variables, config_path=None):
                             r_style.append(f"font-family: '{run.font.name}', 'Times New Roman', serif;")
                         if run.font.color and run.font.color.rgb:
                             rgb = run.font.color.rgb
-                            r_style.append(f"color: #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x};")
+                            r_style.append(f"color: #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x} !important;")
+                        else:
+                            r_style.append("color: #1a202c !important;")
                             
                         text_html = run.text.replace("\n", "<br>")
                         html.append(f"<span style='{' '.join(r_style)}'>{text_html}</span>")
@@ -1023,17 +1517,13 @@ def generate_docx_preview(template_path, variables, config_path=None):
                     html.append("</p>")
             elif element.tag.endswith('tbl'):
                 # It's a table
-                table = None
-                for t in doc.tables:
-                    if t._tbl == element:
-                        table = t
-                        break
+                table = t_map.get(element)
                 if table:
-                    html.append("<table style='border-collapse: collapse; width: 100%; margin: 15px 0; border: 1px solid #cbd5e1;'>")
+                    html.append("<table style='border-collapse: collapse; width: 100%; margin: 15px 0; border: 1px solid #cbd5e1; color: #1a202c !important;'>")
                     for row in table.rows:
                         html.append("<tr>")
                         for cell in row.cells:
-                            html.append("<td style='border: 1px solid #cbd5e1; padding: 8px; vertical-align: top;'>")
+                            html.append("<td style='border: 1px solid #cbd5e1; padding: 8px; vertical-align: top; color: #1a202c !important;'>")
                             for cell_p in cell.paragraphs:
                                 cell_p_style = []
                                 align = cell_p.alignment
@@ -1067,6 +1557,7 @@ def generate_docx_preview(template_path, variables, config_path=None):
                                 else:
                                     cell_p_style.append("line-height: 1.15;")
                                     
+                                cell_p_style.append("color: #1a202c !important;")
                                 html.append(f"<p style='{' '.join(cell_p_style)}'>")
                                 for run in cell_p.runs:
                                     r_style = []
@@ -1080,7 +1571,9 @@ def generate_docx_preview(template_path, variables, config_path=None):
                                         r_style.append(f"font-size: {run.font.size.pt}pt;")
                                     if run.font.color and run.font.color.rgb:
                                         rgb = run.font.color.rgb
-                                        r_style.append(f"color: #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x};")
+                                        r_style.append(f"color: #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x} !important;")
+                                    else:
+                                        r_style.append("color: #1a202c !important;")
                                     text_html = run.text.replace("\n", "<br>")
                                     html.append(f"<span style='{' '.join(r_style)}'>{text_html}</span>")
                                 if not cell_p.runs:
@@ -1098,7 +1591,7 @@ def generate_docx_preview(template_path, variables, config_path=None):
             
         return "\n".join(html)
     except Exception as e:
-        return f"<div style='color: red; font-weight: bold;'>Помилка попереднього перегляду Word: {e}</div>"
+        return f"<div style='color: red !important; font-weight: bold;'>Помилка попереднього перегляду Word: {e}</div>"
 
 def generate_xlsx_preview(template_path, variables, config_path=None):
     """Generates a temporary Excel document and extracts its content for quick preview in high-fidelity HTML."""
@@ -1130,12 +1623,22 @@ def generate_xlsx_preview(template_path, variables, config_path=None):
         
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
-            html.append(f"<h4 style='color: #2b6cb0; margin-top: 15px; border-bottom: 2px solid #2b6cb0; padding-bottom: 5px;'>Аркуш: {sheet_name}</h4>")
+            html.append(f"<h4 style='color: #2b6cb0 !important; margin-top: 15px; border-bottom: 2px solid #2b6cb0 !important; padding-bottom: 5px;'>Аркуш: {sheet_name}</h4>")
+            # Get dimensions and restrict preview size
+            total_rows = ws.max_row
+            total_cols = ws.max_column
+            
+            max_preview_rows = min(total_rows or 0, 100)
+            max_preview_cols = min(total_cols or 0, 25)
+            
+            if (total_rows and total_rows > 100) or (total_cols and total_cols > 25):
+                html.append(f"<div style='background-color: #fffaf0; border: 1px solid #feebc8; color: #c05621; padding: 10px; border-radius: 6px; margin-bottom: 10px; font-size: 12px;'>⚠️ Аркуш занадто великий ({total_rows} рядків, {total_cols} колонок). Показано лише перші 100 рядків та 25 колонок.</div>")
+            
             html.append("<table style='border-collapse: collapse; border: 1px solid #cbd5e1; font-size: 13px; min-width: 100%;'>")
             
-            rows = list(ws.iter_rows())
+            rows = list(ws.iter_rows(max_row=max_preview_rows, max_col=max_preview_cols))
             if not rows:
-                html.append("<tr><td style='padding: 10px; color: #718096;'>Аркуш порожній</td></tr>")
+                html.append("<tr><td style='padding: 10px; color: #718096 !important;'>Аркуш порожній</td></tr>")
                 html.append("</table>")
                 continue
                 
@@ -1150,7 +1653,7 @@ def generate_xlsx_preview(template_path, variables, config_path=None):
                     if val_str.startswith('='):
                         # Excel formula formatting
                         escaped_formula = py_html.escape(val_str)
-                        val_display = f"<span style='color: #2b6cb0; font-family: \"JetBrains Mono\", monospace; font-size: 11px; font-weight: 500; background-color: #ebf8ff; border: 1px solid #bee3f8; border-radius: 4px; padding: 2px 6px; display: inline-block;'>fx {escaped_formula}</span>"
+                        val_display = f"<span style='color: #2b6cb0 !important; font-family: \"JetBrains Mono\", monospace; font-size: 11px; font-weight: 500; background-color: #ebf8ff !important; border: 1px solid #bee3f8; border-radius: 4px; padding: 2px 6px; display: inline-block;'>fx {escaped_formula}</span>"
                     else:
                         val_display = py_html.escape(str(val) if val is not None else "")
                         
@@ -1175,7 +1678,7 @@ def generate_xlsx_preview(template_path, variables, config_path=None):
                             if len(rgb) == 8:
                                 rgb = rgb[2:]
                             if rgb != "00000000":
-                                styles.append(f"color: #{rgb};")
+                                styles.append(f"color: #{rgb} !important;")
                                 
                     if cell.fill and isinstance(cell.fill, PatternFill) and cell.fill.fill_type == "solid":
                         if cell.fill.fgColor and cell.fill.fgColor.rgb:
@@ -1183,7 +1686,7 @@ def generate_xlsx_preview(template_path, variables, config_path=None):
                             if len(rgb) == 8:
                                 rgb = rgb[2:]
                             if rgb != "00000000":
-                                styles.append(f"background-color: #{rgb};")
+                                styles.append(f"background-color: #{rgb} !important;")
                                 
                     styles_str = " ".join(styles)
                     html.append(f"<td style='border: 1px solid #cbd5e1; padding: 6px 12px; min-width: 80px; {styles_str}'>{val_display}</td>")
@@ -1332,6 +1835,8 @@ with col_theme:
     theme_emoji = "🌙" if theme == "light" else "☀️"
     if st.button(theme_emoji, key="theme_toggle_btn", use_container_width=True):
         st.session_state["theme"] = "dark" if theme == "light" else "light"
+        st.session_state["theme_changed"] = True
+        save_persistent_state()
         st.rerun()
 
 st.markdown("---")
@@ -1345,67 +1850,86 @@ views_list = [
     "📖 Повна Довідка"
 ]
 
-if "app_view_selector" not in st.session_state or st.session_state["app_view_selector"] not in views_list:
-    if "current_view" in st.session_state and st.session_state["current_view"] in views_list:
-        st.session_state["app_view_selector"] = st.session_state["current_view"]
-    else:
-        st.session_state["app_view_selector"] = views_list[0]
+if "current_view" not in st.session_state:
+    st.session_state["current_view"] = views_list[0]
 
-# Determine default index from session state to avoid key parameter conflicts in Streamlit selectbox
-try:
-    default_idx = views_list.index(st.session_state["app_view_selector"])
-except Exception:
-    default_idx = 0
+if st.session_state["current_view"] not in views_list:
+    st.session_state["current_view"] = views_list[0]
+
+if "app_view_selector" not in st.session_state:
+    st.session_state["app_view_selector"] = st.session_state["current_view"]
+
+def on_view_change(new_view):
+    if not new_view:
+        return
+    prev_view = st.session_state.get("current_view", views_list[0])
+    if new_view != prev_view:
+        # Save leaving view's state first
+        save_persistent_state()
+        
+        # 1. Leaving views: Save metadata
+        if prev_view == "📝 Редактор Excel Конфігів":
+            if st.session_state.get("editor_config_path"):
+                st.session_state["last_opened_config"] = st.session_state["editor_config_path"]
+            if st.session_state.get("editor_template_path"):
+                st.session_state["last_opened_template"] = st.session_state["editor_template_path"]
+                
+        # 2. Entering views: Restore cached paths
+        if new_view == "📝 Редактор Excel Конфігів":
+            st.session_state["editor_config_path"] = st.session_state.get("last_opened_config") or ""
+            st.session_state["editor_template_path"] = st.session_state.get("last_opened_template") or ""
+            st.session_state["loaded_config_sheet"] = ""
+            
+            # Reset any data editor session state widgets to avoid cached checkboxes when switching views
+            cfg_path = st.session_state.get("last_opened_config") or ""
+            if cfg_path:
+                clean_cfg_path = "".join([c if c.isalnum() else "_" for c in cfg_path])
+                prefix_config = f"config_data_editor_{clean_cfg_path}_"
+                prefix_headers = f"headers_data_editor_{clean_cfg_path}_"
+                keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix_config) or k.startswith(prefix_headers)]
+                for k in keys_to_del:
+                    del st.session_state[k]
+            
+        elif new_view == "Менеджер Проектів":
+            if not st.session_state.get("pm_folder_path"):
+                st.session_state["pm_folder_path"] = st.session_state.get("last_opened_folder") or ""
+            st.session_state["pm_cached_configs"] = {}
+            
+            # Sync the selected doc index if we came back from Config Editor where preview selection might have changed
+            selected_doc = st.session_state.get("pm_selected_doc")
+            last_idx = st.session_state.get("last_preview_row_idx")
+            if selected_doc and last_idx is not None and selected_doc.get("row_idx") != last_idx:
+                selected_doc["row_idx"] = last_idx
+                st.session_state["pm_selected_doc"] = selected_doc
+                st.session_state["pm_editing_vars"] = None
+                clear_pm_input_keys()
+            sync_pm_editing_vars()
+            
+        elif new_view == "⚡ Генерація Документів":
+            st.session_state["gen_config_path"] = st.session_state.get("last_opened_config") or ""
+                
+        st.session_state["current_view"] = new_view
+        st.session_state["app_view_selector"] = new_view
+        
+        # Save entering view's state updates
+        save_persistent_state()
+        
+        # Load persistent state now to populate session state with values for the entering view
+        load_persistent_state()
+
+def handle_view_selectbox_change():
+    new_view = st.session_state.get("app_view_selector")
+    if new_view:
+        on_view_change(new_view)
 
 selected_view = st.selectbox(
     "Оберіть розділ роботи:",
     views_list,
-    index=default_idx
+    key="app_view_selector",
+    on_change=handle_view_selectbox_change
 )
-st.session_state["app_view_selector"] = selected_view
+
 st.session_state["current_view"] = selected_view
-
-# Track view transitions
-prev_view = st.session_state.get("prev_view")
-if prev_view is None:
-    st.session_state["prev_view"] = selected_view
-    prev_view = selected_view
-
-if prev_view != selected_view:
-    # Transitioning
-    if prev_view == "📝 Редактор Excel Конфігів":
-        # Leaving Config Editor: Save state
-        if st.session_state.get("editor_config_path"):
-            st.session_state["last_opened_config"] = st.session_state["editor_config_path"]
-            st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(st.session_state["editor_config_path"]))
-            st.session_state["pm_folder_path"] = st.session_state["last_opened_folder"]
-        if st.session_state.get("editor_template_path"):
-            st.session_state["last_opened_template"] = st.session_state["editor_template_path"]
-        save_persistent_state()
-        
-    elif selected_view == "📝 Редактор Excel Конфігів":
-        # Entering Config Editor: Restore state and force reload
-        if st.session_state.get("last_opened_config"):
-            st.session_state["editor_config_path"] = st.session_state["last_opened_config"]
-        if st.session_state.get("last_opened_template"):
-            st.session_state["editor_template_path"] = st.session_state["last_opened_template"]
-        # Force reload config sheet data to get latest values
-        st.session_state["loaded_config_sheet"] = ""
-        save_persistent_state()
-        
-    elif selected_view == "Менеджер Проектів":
-        # Entering Project Manager
-        if st.session_state.get("last_opened_folder"):
-            st.session_state["pm_folder_path"] = st.session_state["last_opened_folder"]
-        save_persistent_state()
-        
-    elif selected_view == "⚡ Генерація Документів":
-        # Entering Document Generation
-        if st.session_state.get("last_opened_config"):
-            st.session_state["gen_config_path"] = st.session_state["last_opened_config"]
-        save_persistent_state()
-        
-    st.session_state["prev_view"] = selected_view
 
 st.markdown(" ")
 
@@ -1425,7 +1949,8 @@ if selected_view == "Менеджер Проектів":
         folder_input = st.text_input(
             "📁 Шлях до папки з конфігами та шаблонами:",
             placeholder="Введіть або оберіть шлях до папки (наприклад, example)...",
-            key="pm_folder_path"
+            key="pm_folder_path",
+            on_change=save_persistent_state
         )
     with col_p2:
         st.write(" ")
@@ -1434,6 +1959,8 @@ if selected_view == "Менеджер Проектів":
             selected = open_folder_picker("Оберіть папку з конфігами")
             if selected:
                 st.session_state["pm_folder_path"] = selected
+                st.session_state["last_opened_folder"] = selected
+                save_persistent_state()
         st.button("📁 Обрати папку", key="btn_pm_folder", on_click=select_pm_folder)
         
     pm_path = st.session_state["pm_folder_path"]
@@ -1460,20 +1987,65 @@ if selected_view == "Менеджер Проектів":
             col_tree, col_content = st.columns([5, 7])
             
             with col_tree:
+                only_docs = st.checkbox(
+                    "Лише документи",
+                    key="pm_only_docs",
+                    on_change=save_persistent_state
+                )
+                
                 st.subheader("🌳 Віртуальне дерево документів")
                 
-                # Recursive tree renderer
-                def render_tree_node(node_name, node_value, depth=0):
-                    if isinstance(node_value, dict):
-                        # Folder node
-                        with st.expander("📁 " + node_name, expanded=(depth == 0)):
-                            for name, val in node_value.items():
-                                render_tree_node(name, val, depth + 1)
+                # Recursive tree renderer with auto-expansion of current document path
+                def contains_config_path(tree_dict, target_path):
+                    if not target_path:
+                        return False
+                    try:
+                        target_path = os.path.abspath(target_path).lower()
+                    except Exception:
+                        return False
+                    
+                    def check_node(val):
+                        if isinstance(val, dict):
+                            return any(check_node(v) for v in val.values())
+                        elif isinstance(val, str):
+                            try:
+                                return os.path.abspath(val).lower() == target_path
+                            except Exception:
+                                return False
+                        return False
+                        
+                    return check_node(tree_dict)
+
+                def render_tree_node(node_name, node_value, depth=0, path_prefix=""):
+                    selected_doc = st.session_state.get("pm_selected_doc")
+                    if selected_doc:
+                        config_path_clean = "".join([c if c.isalnum() else "_" for c in selected_doc.get('config_path', '')])
+                        selected_doc_id = f"{config_path_clean}_{selected_doc.get('sheet_name')}_{selected_doc.get('row_idx')}"
                     else:
-                        # Config file node
+                        selected_doc_id = "none"
+                    target_path = selected_doc.get("config_path") if selected_doc else None
+                    
+                    if isinstance(node_value, dict):
+                        # Folder node: expand if root level or if it contains the selected config file path
+                        should_expand = (depth == 0) or (target_path and contains_config_path(node_value, target_path))
+                        exp_key = f"pm_folder_exp_{path_prefix}_{node_name}_{selected_doc_id}"
+                        with st.expander("📁 " + node_name, expanded=should_expand, key=exp_key):
+                            for name, val in node_value.items():
+                                render_tree_node(name, val, depth + 1, path_prefix=f"{path_prefix}_{node_name}")
+                    else:
+                        # Config file node: expand if it is the current config of the selected document
                         config_path = node_value
                         config_name = node_name
-                        with st.expander("📊 " + config_name, expanded=False):
+                        is_current_config = False
+                        if selected_doc and selected_doc.get("config_path"):
+                            try:
+                                is_current_config = os.path.abspath(selected_doc["config_path"]).lower() == os.path.abspath(config_path).lower()
+                            except Exception:
+                                pass
+                        
+                        clean_cfg = "".join([c if c.isalnum() else "_" for c in config_path])
+                        exp_cfg_key = f"pm_cfg_exp_{path_prefix}_{clean_cfg}_{selected_doc_id}"
+                        with st.expander("📊 " + config_name, expanded=is_current_config, key=exp_cfg_key):
                             sheets_data = get_cached_config(config_path)
                             if not sheets_data:
                                 st.caption("Не вдалося завантажити або порожній конфіг")
@@ -1484,22 +2056,29 @@ if selected_view == "Менеджер Проектів":
                                 template_path = info["template_path"]
                                 name_pattern = info["name_pattern"]
                                 
-                                with st.expander(f"📋 {sheet_name} ({len(rows)} док.)", expanded=False):
+                                # Sheet expander: expand if it is the current sheet of the selected document
+                                is_current_sheet = is_current_config and selected_doc.get("sheet_name") == sheet_name
+                                exp_sheet_key = f"pm_sheet_exp_{path_prefix}_{clean_cfg}_{sheet_name}_{selected_doc_id}"
+                                with st.expander(f"📋 {sheet_name} ({len(rows)} док.)", expanded=bool(is_current_sheet), key=exp_sheet_key):
                                     if not rows:
                                         st.caption("Немає даних для генерації")
                                         continue
                                     
                                     for idx, row in enumerate(rows):
-                                        doc_name = resolve_virtual_doc_name(name_pattern, row, template_path)
-                                        if not doc_name.strip():
-                                            doc_name = f"document_{idx + 5}"
-                                            
                                         is_selected = (
                                             st.session_state.get("pm_selected_doc", {}).get("config_path") == config_path and
                                             st.session_state.get("pm_selected_doc", {}).get("sheet_name") == sheet_name and
                                             st.session_state.get("pm_selected_doc", {}).get("row_idx") == idx
                                         )
                                         
+                                        current_row_vars = row
+                                        if is_selected and st.session_state.get("pm_editing_vars") is not None:
+                                            current_row_vars = st.session_state["pm_editing_vars"]
+                                            
+                                        doc_name = resolve_virtual_doc_name(name_pattern, current_row_vars, template_path)
+                                        if not doc_name.strip():
+                                            doc_name = f"document_{idx + 5}"
+                                            
                                         button_type = "primary" if is_selected else "secondary"
                                         
                                         if st.button(
@@ -1519,14 +2098,23 @@ if selected_view == "Менеджер Проектів":
                                             st.session_state["last_opened_config"] = config_path
                                             st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(config_path))
                                             st.session_state["last_opened_template"] = template_path
+                                            st.session_state["pending_download"] = None
+                                            clear_pm_input_keys()
                                             save_persistent_state()
-                                            if "pm_editing_vars" in st.session_state:
-                                                del st.session_state["pm_editing_vars"]
+                                            st.session_state["pm_editing_vars"] = None
+                                            save_persistent_state()
                                             st.rerun()
 
-                # Render tree roots
-                for name, val in dir_tree.items():
-                    render_tree_node(name, val, 0)
+                if only_docs:
+                    docs_tree = build_docs_only_tree(config_files, pm_path)
+                    if not docs_tree:
+                        st.info("Документів не знайдено.")
+                    else:
+                        render_docs_only_tree(docs_tree, 0)
+                else:
+                    # Render tree roots
+                    for name, val in dir_tree.items():
+                        render_tree_node(name, val, 0)
                     
             with col_content:
                 selected_doc = st.session_state.get("pm_selected_doc")
@@ -1553,13 +2141,44 @@ if selected_view == "Менеджер Проектів":
                         row_vars = sheet_info["rows"][row_idx]
                         
                         # Initialize editing variables
-                        if "pm_editing_vars" not in st.session_state:
+                        if st.session_state.get("pm_editing_vars") is None:
                             st.session_state["pm_editing_vars"] = dict(row_vars)
                             
                         edited_vars = st.session_state["pm_editing_vars"]
                         
-                        # Show dynamic output name preview
+                        # High fidelity preview (rendered first)
+                        st.markdown(" ")
+                        st.markdown("##### 🔍 Попередній перегляд документа")
+                        
+                        # Resolve relative template path
+                        from _templates_machine_ import resolve_path
+                        cfg_dir = os.path.dirname(os.path.abspath(config_path))
+                        actual_template_path = resolve_path(cfg_dir, template_path)
+                            
+                        if not os.path.exists(actual_template_path):
+                            st.warning(f"Шаблон не знайдено за шляхом: {template_path} (враховуючи відносність до конфігу)")
+                        else:
+                            ext = os.path.splitext(actual_template_path)[1].lower()
+                            with st.spinner("⏳ Генерація прев'ю..."):
+                                if ext == ".docx":
+                                    preview_html = generate_docx_preview(actual_template_path, edited_vars, config_path=config_path)
+                                elif ext == ".xlsx":
+                                    preview_html = generate_xlsx_preview(actual_template_path, edited_vars, config_path=config_path)
+                                else:
+                                    preview_html = f"<div style='color: #e53e3e;'>Непідтримуваний тип шаблону: {ext}</div>"
+                                    
+                            st.markdown(
+                                f"""
+                                <div class="document-preview-container" style="border: 2px solid #3182ce; border-radius: 8px; padding: 25px; background-color: #ffffff; max-height: 500px; overflow-y: auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-left: 8px solid #3182ce;">
+                                    {preview_html}
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            
+                        # Show dynamic output name preview (rendered second)
                         current_resolved_name = resolve_virtual_doc_name(name_pattern, edited_vars, template_path)
+                        st.markdown(" ")
                         st.markdown(f"##### 📄 Вихідне ім'я: `{current_resolved_name}`")
                         
                         # Render editing inputs
@@ -1573,6 +2192,7 @@ if selected_view == "Менеджер Проектів":
                                 new_val = st.text_input(f"{h}", value=val, key=f"pm_input_{config_path}_{sheet_name}_{row_idx}_{h}")
                                 if new_val != val:
                                     edited_vars[h] = new_val
+                                    save_persistent_state()
                                     st.rerun()
                                     
                         # Buttons row
@@ -1615,12 +2235,19 @@ if selected_view == "Менеджер Проектів":
                                 
                         with btn_col3:
                             def go_to_config_editor():
-                                st.session_state["current_view"] = "📝 Редактор Excel Конфігів"
+                                clean_cfg_path = "".join([c if c.isalnum() else "_" for c in config_path])
+                                config_key = f"config_data_editor_{clean_cfg_path}_{sheet_name}"
+                                headers_key = f"headers_data_editor_{clean_cfg_path}_{sheet_name}"
+                                if config_key in st.session_state:
+                                    del st.session_state[config_key]
+                                if headers_key in st.session_state:
+                                    del st.session_state[headers_key]
                                 st.session_state["app_view_selector"] = "📝 Редактор Excel Конфігів"
+                                st.session_state["current_view"] = "📝 Редактор Excel Конфігів"
                                 st.session_state["editor_config_path"] = config_path
                                 st.session_state["editor_selected_sheet"] = sheet_name
-                                st.session_state["widget_editor_sheet"] = sheet_name
                                 st.session_state["loaded_config_sheet"] = ""  # Force reload headers and data
+                                st.session_state["last_preview_row_idx"] = row_idx
                                 # Update last opened values immediately on transition
                                 st.session_state["last_opened_config"] = config_path
                                 st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(config_path))
@@ -1628,35 +2255,17 @@ if selected_view == "Менеджер Проектів":
                                     st.session_state["last_opened_template"] = template_path
                                 save_persistent_state()
                             st.button("✏️ Перейти до редактора конфігів", use_container_width=True, on_click=go_to_config_editor)
-                                
-                        # High fidelity preview
-                        st.markdown(" ")
-                        st.markdown("##### 🔍 Попередній перегляд документа")
-                        
-                        # Resolve relative template path
-                        from _templates_machine_ import resolve_path
-                        cfg_dir = os.path.dirname(os.path.abspath(config_path))
-                        actual_template_path = resolve_path(cfg_dir, template_path)
                             
-                        if not os.path.exists(actual_template_path):
-                            st.warning(f"Шаблон не знайдено за шляхом: {template_path} (враховуючи відносність до конфігу)")
-                        else:
-                            ext = os.path.splitext(actual_template_path)[1].lower()
-                            with st.spinner("⏳ Генерація прев'ю..."):
-                                if ext == ".docx":
-                                    preview_html = generate_docx_preview(actual_template_path, edited_vars, config_path=config_path)
-                                elif ext == ".xlsx":
-                                    preview_html = generate_xlsx_preview(actual_template_path, edited_vars, config_path=config_path)
-                                else:
-                                    preview_html = f"<div style='color: #e53e3e;'>Непідтримуваний тип шаблону: {ext}</div>"
-                                    
-                            st.markdown(
-                                f"""
-                                <div style="border: 2px solid #3182ce; border-radius: 8px; padding: 25px; background-color: #ffffff; max-height: 500px; overflow-y: auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border-left: 8px solid #3182ce;">
-                                    {preview_html}
-                                </div>
-                                """,
-                                unsafe_allow_html=True
+                        pending_download = st.session_state.get("pending_download")
+                        if pending_download and isinstance(pending_download, dict):
+                            st.write(" ")
+                            st.download_button(
+                                label="⬇️ Завантажити згенерований документ через браузер",
+                                data=pending_download["bytes"],
+                                file_name=pending_download["name"],
+                                mime=pending_download["mime"],
+                                key="pm_download_fallback_btn",
+                                use_container_width=True
                             )
 
 # ----------------------------------------------------
@@ -1671,35 +2280,54 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
         selected = open_folder_picker("Оберіть папку з архівом для аналізу")
         if selected:
             st.session_state["txt_auto_folder"] = selected
+            save_persistent_state()
             
     def select_batch_sample():
         selected = open_file_picker()
         if selected:
             st.session_state["txt_batch_sample"] = selected
+            save_persistent_state()
             
     def select_batch_folder():
         selected = open_folder_picker("Оберіть папку для пакетного аналізу")
         if selected:
             st.session_state["txt_batch_folder"] = selected
+            save_persistent_state()
             
     def select_pair_file1():
         selected = open_file_picker()
         if selected:
             st.session_state["txt_pair_file1"] = selected
+            save_persistent_state()
             
     def select_pair_file2():
         selected = open_file_picker()
         if selected:
             st.session_state["txt_pair_file2"] = selected
+            save_persistent_state()
     
+    analysis_modes = [
+        "✈️ Повний автопілот (Сканування папки та автоматичне розбиття на групи)",
+        "🔍 Пакетний аналіз (Один файл-зразок + папка з іншими файлами)",
+        "⚖️ Попарне порівняння (Точне порівняння двох конкретних файлів)"
+    ]
+    if "analysis_mode" not in st.session_state:
+        st.session_state["analysis_mode"] = analysis_modes[0]
+    if st.session_state["analysis_mode"] not in analysis_modes:
+        matched = False
+        for m in analysis_modes:
+            if st.session_state["analysis_mode"] and (st.session_state["analysis_mode"] in m or m in st.session_state["analysis_mode"]):
+                st.session_state["analysis_mode"] = m
+                matched = True
+                break
+        if not matched:
+            st.session_state["analysis_mode"] = analysis_modes[0]
+
     mode = st.radio(
         "Оберіть режим аналізу:",
-        [
-            "✈️ Повний автопілот (Сканування папки та автоматичне розбиття на групи)",
-            "🔍 Пакетний аналіз (Один файл-зразок + папка з іншими файлами)",
-            "⚖️ Попарне порівняння (Точне порівняння двох конкретних файлів)"
-        ],
-        index=0
+        analysis_modes,
+        key="analysis_mode",
+        on_change=save_persistent_state
     )
     
     # --- ALWAYS-VISIBLE ANALYSIS OUTPUT DIRECTORY SELECTION ---
@@ -1711,7 +2339,8 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
         a_out_dir = st.text_input(
             "📁 Шлях до папки результатів:",
             placeholder="Наприклад: C:/MyTemplates (залиште порожнім для збереження за замовчуванням)",
-            key="analysis_output_dir"
+            key="analysis_output_dir",
+            on_change=save_persistent_state
         )
     with col_ao2:
         st.write(" ")
@@ -1720,6 +2349,7 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
             selected = open_folder_picker("Оберіть папку для збереження результатів")
             if selected:
                 st.session_state["analysis_output_dir"] = selected
+                save_persistent_state()
         st.button("📁 Обрати папку", key="btn_analysis_output_dir", on_click=select_analysis_output_dir)
         
     st.markdown("---")
@@ -1733,7 +2363,8 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
             folder_path = st.text_input(
                 "Шлях до папки з архівом документів:",
                 placeholder="Наприклад: example/docs",
-                key="txt_auto_folder"
+                key="txt_auto_folder",
+                on_change=save_persistent_state
             )
         with col2:
             st.write(" ")
@@ -1762,7 +2393,8 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
             sample_file = st.text_input(
                 "Шлях до файлу-зразка (.docx або .xlsx):",
                 placeholder="Наприклад: example/w.docx",
-                key="txt_batch_sample"
+                key="txt_batch_sample",
+                on_change=save_persistent_state
             )
         with col2:
             st.write(" ")
@@ -1775,7 +2407,8 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
             folder_path = st.text_input(
                 "Шлях до папки порівняння:",
                 placeholder="Наприклад: example",
-                key="txt_batch_folder"
+                key="txt_batch_folder",
+                on_change=save_persistent_state
             )
         with col2:
             st.write(" ")
@@ -1806,7 +2439,8 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
             file_1 = st.text_input(
                 "Шлях до Першого файлу:",
                 placeholder="Наприклад: example/w1.docx",
-                key="txt_pair_file1"
+                key="txt_pair_file1",
+                on_change=save_persistent_state
             )
         with col2:
             st.write(" ")
@@ -1819,7 +2453,8 @@ if selected_view == "✈️ Аналіз та Створення Шаблоні�
             file_2 = st.text_input(
                 "Шлях до Другого файлу:",
                 placeholder="Наприклад: example/w2.docx",
-                key="txt_pair_file2"
+                key="txt_pair_file2",
+                on_change=save_persistent_state
             )
         with col2:
             st.write(" ")
@@ -1853,7 +2488,8 @@ elif selected_view == "📝 Редактор Excel Конфігів":
         selected_config = st.text_input(
             "Шлях до файлу конфігурації для редагування:",
             placeholder="Оберіть Excel-файл конфігурації...",
-            key="editor_config_path"
+            key="editor_config_path",
+            on_change=save_persistent_state
         )
     with col_c2:
         st.write(" ")
@@ -1862,13 +2498,15 @@ elif selected_view == "📝 Редактор Excel Конфігів":
             selected = open_file_picker(filetypes=[("Excel конфігурації", "*.xlsx"), ("Усі файли", "*.*")])
             if selected:
                 st.session_state["editor_config_path"] = selected
+                st.session_state["last_opened_config"] = selected
+                st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(selected))
+                save_persistent_state()
         st.button("📁 Обрати конфіг", key="btn_editor_config", on_click=select_editor_config)
         
     cfg_path = st.session_state["editor_config_path"]
-    if cfg_path and (cfg_path != st.session_state.get("last_opened_config") or os.path.dirname(os.path.abspath(cfg_path)) != st.session_state.get("last_opened_folder")):
+    if cfg_path and cfg_path != st.session_state.get("last_opened_config"):
         st.session_state["last_opened_config"] = cfg_path
         st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(cfg_path))
-        st.session_state["pm_folder_path"] = st.session_state["last_opened_folder"]
         save_persistent_state()
     if not cfg_path:
         st.info("Будь ласка, оберіть файл конфігурації Excel (`*.xlsx`) для початку роботи!")
@@ -1886,12 +2524,9 @@ elif selected_view == "📝 Редактор Excel Конфігів":
             selected_sheet = st.selectbox(
                 "Оберіть аркуш конфігурації:",
                 sheet_names,
-                index=sheet_names.index(st.session_state["editor_selected_sheet"]) if st.session_state["editor_selected_sheet"] in sheet_names else 0,
-                key="widget_editor_sheet"
+                key="editor_selected_sheet",
+                on_change=save_persistent_state
             )
-            
-            if selected_sheet != st.session_state["editor_selected_sheet"]:
-                st.session_state["editor_selected_sheet"] = selected_sheet
                 
             # --- SHEET CRUD MANAGEMENT ---
             with st.expander("📂 Керування аркушами (Sheets Operations)", expanded=False):
@@ -1907,6 +2542,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                             clean_s_name = re.sub(r'[\\/*?:\[\]]', "", new_s_name)[:31].strip()
                             if create_new_sheet(cfg_path, clean_s_name):
                                 st.session_state["editor_selected_sheet"] = clean_s_name
+                                save_persistent_state()
                                 st.success(f"Аркуш '{clean_s_name}' успішно створено!")
                                 time.sleep(1)
                                 st.rerun()
@@ -1921,6 +2557,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                             clean_rename_name = re.sub(r'[\\/*?:\[\]]', "", new_rename_name)[:31].strip()
                             if rename_sheet(cfg_path, selected_sheet, clean_rename_name):
                                 st.session_state["editor_selected_sheet"] = clean_rename_name
+                                save_persistent_state()
                                 st.success(f"Аркуш перейменовано на '{clean_rename_name}'!")
                                 time.sleep(1)
                                 st.rerun()
@@ -1937,6 +2574,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                                 st.success(f"Аркуш '{selected_sheet}' видалено!")
                                 remaining_sheets = [s for s in sheet_names if s != selected_sheet]
                                 st.session_state["editor_selected_sheet"] = remaining_sheets[0] if remaining_sheets else ""
+                                save_persistent_state()
                                 time.sleep(1)
                                 st.rerun()
                                 
@@ -1965,7 +2603,8 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                     t_path = st.text_input(
                         "📄 Шлях до шаблону (комірка A1):",
                         placeholder="Оберіть файл шаблону...",
-                        key="editor_template_path"
+                        key="editor_template_path",
+                        on_change=save_persistent_state
                     )
                 with col_t2:
                     st.write(" ")
@@ -1979,13 +2618,15 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                         ])
                         if selected:
                             st.session_state["editor_template_path"] = selected
+                            save_persistent_state()
                     st.button("📁 Шаблон", key="btn_editor_template", on_click=select_editor_template)
                     
             with col2:
                 n_pattern = st.text_input(
                     "✍️ Шаблон імені вихідних файлів (комірка A2):",
                     placeholder="Наприклад: output_{{YYYY}}.docx",
-                    key="editor_name_pattern"
+                    key="editor_name_pattern",
+                    on_change=save_persistent_state
                 )
                 
             # Sync template path to last_opened_template immediately if changed
@@ -2010,6 +2651,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                             st.session_state["current_sheet_headers"].append(new_col)
                             for r in st.session_state["current_sheet_data"]:
                                 r[new_col] = ""
+                            save_persistent_state()
                             st.success(f"Стовпчик '{new_col}' додано!")
                             st.rerun()
                             
@@ -2026,7 +2668,10 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                                 for r in st.session_state["current_sheet_data"]:
                                     if col_to_del in r:
                                         r.pop(col_to_del)
+                                save_persistent_state()
                                 st.success(f"Стовпчик '{col_to_del}' видалено!")
+                                rerun_needed = True
+                                # We let it rerun at the end of the block if rerun_needed is set, but st.rerun() is immediate anyway.
                                 st.rerun()
                     else:
                         st.caption("Немає активних стовпчиків.")
@@ -2035,6 +2680,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                 if st.button("➕ Додати рядок", key="btn_compact_add_row", width="stretch"):
                     new_row = {h: "" for h in st.session_state["current_sheet_headers"]}
                     st.session_state["current_sheet_data"].append(new_row)
+                    save_persistent_state()
                     st.success("Рядок додано!")
                     st.rerun()
                     
@@ -2049,6 +2695,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                             else:
                                 idx = int(row_to_del) - 1
                                 st.session_state["current_sheet_data"].pop(idx)
+                                save_persistent_state()
                                 st.success(f"Рядок {row_to_del} видалено!")
                                 st.rerun()
                     else:
@@ -2058,36 +2705,6 @@ elif selected_view == "📝 Редактор Excel Конфігів":
             st.markdown("### 📊 Дані рядків для генерації документів (починаючи з рядка 5)")
             st.caption("Оберіть рядок для перегляду за допомогою прапорця в колонці **«Перегляд»** ліворуч. Клікніть двічі на будь-завгодно клітинку для редагування.")
             
-            # Synchronize changes from Streamlit's data editor to session state
-            if "config_data_editor" in st.session_state:
-                editor_state = st.session_state["config_data_editor"]
-                
-                # 1. Sync edited cells
-                edited_rows = editor_state.get("edited_rows", {})
-                for row_idx_str, edits in edited_rows.items():
-                    row_idx = int(row_idx_str)
-                    if row_idx < len(st.session_state["current_sheet_data"]):
-                        for col, val in edits.items():
-                            if col == "Перегляд":
-                                if val is True:
-                                    st.session_state["last_preview_row_idx"] = row_idx
-                                elif val is False and st.session_state.get("last_preview_row_idx") == row_idx:
-                                    st.session_state["last_preview_row_idx"] = None
-                            elif col in st.session_state["current_sheet_headers"]:
-                                st.session_state["current_sheet_data"][row_idx][col] = str(val)
-                                
-                # 2. Sync added rows
-                added_rows = editor_state.get("added_rows", [])
-                for row in added_rows:
-                    new_row = {h: str(row.get(h, "")) for h in st.session_state["current_sheet_headers"]}
-                    st.session_state["current_sheet_data"].append(new_row)
-                    
-                # 3. Sync deleted rows
-                deleted_rows = editor_state.get("deleted_rows", [])
-                for row_idx in sorted(deleted_rows, reverse=True):
-                    if row_idx < len(st.session_state["current_sheet_data"]):
-                        st.session_state["current_sheet_data"].pop(row_idx)
-            
             # --- INTERACTIVE COLUMN HEADERS EDITOR (EDITABLE BY DOUBLE-CLICK) ---
             st.markdown("##### ✏️ Редагувати назви змінних (подвійний клік на осередки правої колонки):")
             headers_list = st.session_state["current_sheet_headers"]
@@ -2096,6 +2713,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                 "Нова назва змінної": headers_list
             })
             
+            clean_cfg_path = "".join([c if c.isalnum() else "_" for c in cfg_path])
             edited_headers_df = st.data_editor(
                 headers_df,
                 column_config={
@@ -2104,41 +2722,8 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                 },
                 hide_index=True,
                 width="stretch",
-                key="headers_data_editor"
+                key=f"headers_data_editor_{clean_cfg_path}_{selected_sheet}"
             )
-            
-            # Check for header modifications
-            changed_headers = {}
-            for idx, r in edited_headers_df.iterrows():
-                orig = r["Поточне ім'я змінної"]
-                new_val = r["Нова назва змінної"].strip()
-                if new_val and new_val != orig:
-                    changed_headers[orig] = new_val
-                    
-            if changed_headers:
-                error_occurred = False
-                for orig, new_val in changed_headers.items():
-                    if new_val in st.session_state["current_sheet_headers"]:
-                        st.error(f"Помилка: змінна з ім'ям '{new_val}' вже існує!")
-                        error_occurred = True
-                    else:
-                        h_idx = st.session_state["current_sheet_headers"].index(orig)
-                        st.session_state["current_sheet_headers"][h_idx] = new_val
-                        
-                        # Rename key in row data
-                        for row in st.session_state["current_sheet_data"]:
-                            if orig in row:
-                                row[new_val] = row.pop(orig)
-                                
-                        # Queue in pending template renames to update template on Save Excel
-                        if "pending_template_renames" not in st.session_state:
-                            st.session_state["pending_template_renames"] = []
-                        st.session_state["pending_template_renames"].append((orig, new_val))
-                        
-                if not error_occurred:
-                    st.success("Назви змінних оновлено!")
-                    time.sleep(0.5)
-                    st.rerun()
 
             headers = st.session_state["current_sheet_headers"]
             rows = st.session_state["current_sheet_data"]
@@ -2163,7 +2748,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                 df,
                 num_rows="dynamic",
                 width="stretch",
-                key="config_data_editor"
+                key=f"config_data_editor_{clean_cfg_path}_{selected_sheet}"
             )
             
             # Determine selected index, default to the last tracked one
@@ -2211,6 +2796,9 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                         # Clear pending renames list after successfully applying them
                         st.session_state["pending_template_renames"] = []
 
+                    # Clear pm inputs and reset PM editing vars to force reload updated cells from Excel on navigation back
+                    clear_pm_input_keys()
+                    st.session_state["pm_editing_vars"] = None
                     st.success("🎉 Всі зміни успішно записані в Excel файл!")
                     st.balloons()
                     time.sleep(1)
@@ -2254,7 +2842,7 @@ elif selected_view == "📝 Редактор Excel Конфігів":
                             
                     st.markdown(
                         f"""
-                        <div style="border: 2px solid #3182ce; border-radius: 8px; padding: 25px; background-color: #ffffff; max-height: 600px; overflow-y: auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); border-left: 8px solid #3182ce;">
+                        <div class="document-preview-container" style="border: 2px solid #3182ce; border-radius: 8px; padding: 25px; background-color: #ffffff; max-height: 600px; overflow-y: auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06); border-left: 8px solid #3182ce;">
                             {preview_html}
                         </div>
                         """,
@@ -2275,7 +2863,8 @@ elif selected_view == "⚡ Генерація Документів":
         g_config_input = st.text_input(
             "Шлях до файлу конфігурації для генерації:",
             placeholder="Оберіть Excel-файл конфігурації...",
-            key="gen_config_path"
+            key="gen_config_path",
+            on_change=save_persistent_state
         )
     with col_g2:
         st.write(" ")
@@ -2284,19 +2873,20 @@ elif selected_view == "⚡ Генерація Документів":
             selected = open_file_picker(filetypes=[("Excel конфігурації", "*.xlsx"), ("Усі файли", "*.*")])
             if selected:
                 st.session_state["gen_config_path"] = selected
+                st.session_state["last_opened_config"] = selected
+                st.session_state["last_opened_folder"] = os.path.dirname(os.path.abspath(selected))
+                save_persistent_state()
         st.button("📁 Обрати конфіг", key="btn_gen_config", on_click=select_gen_config)
         
     # Sync document generation path to last_opened state if it changes
     g_path = st.session_state["gen_config_path"]
-    if g_path:
+    if g_path and g_path != st.session_state.get("last_opened_config"):
         try:
             abs_g_path = os.path.abspath(g_path)
             g_folder = os.path.dirname(abs_g_path)
-            if g_path != st.session_state.get("last_opened_config") or g_folder != st.session_state.get("last_opened_folder"):
-                st.session_state["last_opened_config"] = g_path
-                st.session_state["last_opened_folder"] = g_folder
-                st.session_state["pm_folder_path"] = g_folder
-                save_persistent_state()
+            st.session_state["last_opened_config"] = g_path
+            st.session_state["last_opened_folder"] = g_folder
+            save_persistent_state()
         except Exception:
             pass
     
@@ -2309,7 +2899,8 @@ elif selected_view == "⚡ Генерація Документів":
         g_out_dir = st.text_input(
             "📁 Шлях до папки збереження:",
             placeholder="Наприклад: C:/ProcessedDocs (залиште порожнім за замовчуванням)",
-            key="gen_output_dir"
+            key="gen_output_dir",
+            on_change=save_persistent_state
         )
     with col_go2:
         st.write(" ")
@@ -2318,6 +2909,7 @@ elif selected_view == "⚡ Генерація Документів":
             selected = open_folder_picker("Оберіть папку для збереження готових документів")
             if selected:
                 st.session_state["gen_output_dir"] = selected
+                save_persistent_state()
         st.button("📁 Обрати папку", key="btn_gen_output_dir", on_click=select_gen_output_dir)
     if not g_path:
         st.info("Будь ласка, оберіть Excel-файл конфігурації для генерації!")
@@ -2328,7 +2920,7 @@ elif selected_view == "⚡ Генерація Документів":
         
         if g_sheets_data:
             g_sheet_names = ["all (Всі аркуші)"] + list(g_sheets_data.keys())
-            selected_g_sheet = st.selectbox("Оберіть аркуш для обробки:", g_sheet_names, key="gen_sheet_select")
+            selected_g_sheet = st.selectbox("Оберіть аркуш для обробки:", g_sheet_names, key="gen_sheet_select", on_change=save_persistent_state)
             
             actual_sheet_name = ""
             if selected_g_sheet != "all (Всі аркуші)":
@@ -2342,6 +2934,7 @@ elif selected_view == "⚡ Генерація Документів":
                     st.session_state["gen_template_path"] = g_sheets_data[actual_sheet_name]["template_path"]
                 else:
                     st.session_state["gen_template_path"] = ""
+                save_persistent_state()
                 
             # --- VIEW/CHANGE TEMPLATE FILE VIA DIALOG ---
             if actual_sheet_name:
@@ -2355,7 +2948,8 @@ elif selected_view == "⚡ Генерація Документів":
                     new_gt_path = st.text_input(
                         "📄 Поточний шлях до шаблону:",
                         placeholder="Оберіть файл шаблону...",
-                        key="gen_template_path"
+                        key="gen_template_path",
+                        on_change=save_persistent_state
                     )
                 with col_gt2:
                     st.write(" ")
@@ -2369,6 +2963,7 @@ elif selected_view == "⚡ Генерація Документів":
                         ])
                         if selected:
                             st.session_state["gen_template_path"] = selected
+                            save_persistent_state()
                             if update_config_template_path(g_path, actual_sheet_name, selected):
                                 st.toast(f"✅ Шаблон оновлено в Excel: {os.path.basename(selected)}", icon="💾")
                     st.button("📁 Змінити шаблон", key="btn_gen_template", on_click=select_gen_template)
@@ -2399,7 +2994,7 @@ elif selected_view == "⚡ Генерація Документів":
                     preview_str = ", ".join(preview_fields) if preview_fields else "Порожній рядок"
                     row_options.append(f"{5 + i} — ({preview_str})")
                     
-                selected_g_row_str = st.selectbox("Оберіть рядок для обробки (за номером рядка в Excel):", row_options, key="gen_row_select")
+                selected_g_row_str = st.selectbox("Оберіть рядок для обробки (за номером рядка в Excel):", row_options, key="gen_row_select", on_change=save_persistent_state)
                 
                 if "all" in selected_g_row_str:
                     selected_g_row = "all"
@@ -2439,6 +3034,20 @@ elif selected_view == "⚡ Генерація Документів":
                 run_subprocess_and_stream(args)
                 st.rerun() # Refresh to display persistent logs immediately
 
+            # Param change check & stable completion status rendering
+            current_gen_params = f"{g_path}_{selected_g_sheet}_{selected_g_row}_{st.session_state.get('gen_output_dir', '')}"
+            if st.session_state.get("last_gen_params") != current_gen_params:
+                st.session_state["last_gen_params"] = current_gen_params
+                st.session_state["gen_completion_status"] = None
+                
+            if st.session_state.get("gen_completion_status"):
+                status = st.session_state["gen_completion_status"]
+                st.write(" ")
+                if status == "success":
+                    st.success("🎉 Документи успішно згенеровано!")
+                elif status == "error":
+                    st.error("❌ Сталася помилка під час генерації документів. Перегляньте лог консолі нижче.")
+
     # Persistent log viewer at the bottom of generator tab
     show_last_operation_logs()
 
@@ -2446,22 +3055,8 @@ elif selected_view == "⚡ Генерація Документів":
 # VIEW 4: HELP & DOCUMENTATION
 # ----------------------------------------------------
 elif selected_view == "📖 Повна Довідка":
-    # Inject giant card container styling for the documentation page
-    st.markdown(f"""
-    <style>
-        [data-testid="stMainBlockContainer"], .block-container {{
-            background: {card_bg} !important;
-            backdrop-filter: blur(10px) !important;
-            -webkit-backdrop-filter: blur(10px) !important;
-            border: 1px solid {card_border} !important;
-            border-radius: 16px !important;
-            box-shadow: 0 8px 32px 0 {shadow_color} !important;
-            padding: 3rem !important;
-            margin-top: 1.5rem !important;
-            margin-bottom: 2.5rem !important;
-        }}
-    </style>
-    """, unsafe_allow_html=True)
+    # Render a marker element to trigger CSS scoped styling for the documentation page
+    st.markdown('<div class="help-page-marker"></div>', unsafe_allow_html=True)
 
     st.header("📖 Повний посібник користувача")
     st.write("Детальний опис можливостей та технічний посібник роботи комбайна (завантажено з _templates_machine_.txt).")
