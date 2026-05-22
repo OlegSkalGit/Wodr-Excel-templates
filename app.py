@@ -892,10 +892,12 @@ def build_docs_only_tree(config_files, root_path):
             name_pattern = info.get("name_pattern", "")
             
             for idx, row in enumerate(rows):
+                sel_doc = st.session_state.get("pm_selected_doc")
                 is_selected = (
-                    st.session_state.get("pm_selected_doc", {}).get("config_path") == abs_config_path and
-                    st.session_state.get("pm_selected_doc", {}).get("sheet_name") == sheet_name and
-                    st.session_state.get("pm_selected_doc", {}).get("row_idx") == idx
+                    sel_doc is not None and
+                    sel_doc.get("config_path") == abs_config_path and
+                    sel_doc.get("sheet_name") == sheet_name and
+                    sel_doc.get("row_idx") == idx
                 )
                 current_row_vars = row
                 if is_selected and st.session_state.get("pm_editing_vars") is not None:
@@ -2078,9 +2080,10 @@ if selected_view == "Менеджер Проектів":
                                     
                                     for idx, row in enumerate(rows):
                                         is_selected = (
-                                            st.session_state.get("pm_selected_doc", {}).get("config_path") == config_path and
-                                            st.session_state.get("pm_selected_doc", {}).get("sheet_name") == sheet_name and
-                                            st.session_state.get("pm_selected_doc", {}).get("row_idx") == idx
+                                            selected_doc is not None and
+                                            selected_doc.get("config_path") == config_path and
+                                            selected_doc.get("sheet_name") == sheet_name and
+                                            selected_doc.get("row_idx") == idx
                                         )
                                         
                                         current_row_vars = row
