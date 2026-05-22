@@ -138,6 +138,8 @@ def save_persistent_state():
         "pm_editing_vars",
         "pending_template_renames",
         "pm_loaded_doc_key",
+        "pm_loaded_doc_mtime",
+        "last_gen_params",
         "gen_completion_status"
     ]
     
@@ -200,7 +202,16 @@ def sync_pm_editing_vars():
             current_doc_key = f"{config_path}_{sheet_name}_{row_idx}"
             loaded_doc_key = st.session_state.get("pm_loaded_doc_key")
             
-            if current_doc_key != loaded_doc_key or st.session_state.get("pm_editing_vars") is None:
+            try:
+                mtime = os.path.getmtime(config_path)
+            except Exception:
+                mtime = 0
+                
+            # Reload if document selection changed, editing vars are missing, or the file was modified on disk
+            if (current_doc_key != loaded_doc_key 
+                or st.session_state.get("pm_editing_vars") is None 
+                or st.session_state.get("pm_loaded_doc_mtime") != mtime):
+                
                 if "pm_cached_configs" not in st.session_state:
                     st.session_state["pm_cached_configs"] = {}
                 if config_path in st.session_state["pm_cached_configs"]:
@@ -211,6 +222,7 @@ def sync_pm_editing_vars():
                     if row_idx < len(rows):
                         st.session_state["pm_editing_vars"] = dict(rows[row_idx])
                         st.session_state["pm_loaded_doc_key"] = current_doc_key
+                        st.session_state["pm_loaded_doc_mtime"] = mtime
                         save_persistent_state()
 
 def sync_data_editor_states():
