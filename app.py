@@ -894,7 +894,7 @@ def build_docs_only_tree(config_files, root_path):
             for idx, row in enumerate(rows):
                 sel_doc = st.session_state.get("pm_selected_doc")
                 is_selected = (
-                    sel_doc is not None and
+                    isinstance(sel_doc, dict) and
                     sel_doc.get("config_path") == abs_config_path and
                     sel_doc.get("sheet_name") == sheet_name and
                     sel_doc.get("row_idx") == idx
@@ -2080,7 +2080,7 @@ if selected_view == "Менеджер Проектів":
                                     
                                     for idx, row in enumerate(rows):
                                         is_selected = (
-                                            selected_doc is not None and
+                                            isinstance(selected_doc, dict) and
                                             selected_doc.get("config_path") == config_path and
                                             selected_doc.get("sheet_name") == sheet_name and
                                             selected_doc.get("row_idx") == idx
