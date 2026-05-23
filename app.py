@@ -666,9 +666,8 @@ st.markdown(f"""
         border: 1px solid {card_border} !important;
     }}
     
-    /* Scoped styling for help page when the marker is present in DOM */
-    div[data-testid="stMainBlockContainer"]:has(.help-page-marker),
-    .block-container:has(.help-page-marker) {{
+    /* Scoped card styling for the help page content container */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.help-page-marker) {{
         background: {card_bg} !important;
         backdrop-filter: blur(10px) !important;
         -webkit-backdrop-filter: blur(10px) !important;
@@ -678,6 +677,10 @@ st.markdown(f"""
         padding: 3rem !important;
         margin-top: 1.5rem !important;
         margin-bottom: 2.5rem !important;
+        color: {text_color} !important;
+    }}
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.help-page-marker) > div {{
+        background: transparent !important;
     }}
     
     /* Responsive Theme Toggle */
@@ -3070,15 +3073,16 @@ elif selected_view == "⚡ Генерація Документів":
 # VIEW 4: HELP & DOCUMENTATION
 # ----------------------------------------------------
 elif selected_view == "📖 Повна Довідка":
-    # Render a marker element to trigger CSS scoped styling for the documentation page
-    st.markdown('<div class="help-page-marker"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        # Render a marker element to trigger CSS scoped styling for this container
+        st.markdown('<div class="help-page-marker"></div>', unsafe_allow_html=True)
 
-    st.header("📖 Повний посібник користувача")
-    st.write("Детальний опис можливостей та технічний посібник роботи комбайна (завантажено з _templates_machine_.txt).")
-    
-    st.markdown("---")
-    
-    doc_markdown = get_formatted_documentation_markdown()
-    st.markdown(doc_markdown)
+        st.header("📖 Повний посібник користувача")
+        st.write("Детальний опис можливостей та технічний посібник роботи комбайна (завантажено з _templates_machine_.txt).")
+        
+        st.markdown("---")
+        
+        doc_markdown = get_formatted_documentation_markdown()
+        st.markdown(doc_markdown)
 
 # End of file
