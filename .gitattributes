@@ -1,0 +1,19 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Batch files must always use CRLF line endings
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Python, markdown, json and config files
+*.py text
+*.md text
+*.json text
+*.gitignore text
+
+# Denote binary files to prevent Git from converting their line endings
+*.xlsx binary
+*.docx binary
+*.png binary
+*.jpg binary
+*.ico binary
