@@ -1,7 +1,0 @@
-openpyxl
-docxtpl
-streamlit
-pandas
-transformers
-torch
-accelerate
