@@ -1,5 +1,5 @@
-# Auto-detect text files and normalize line endings
-* text=auto
+# Auto-detect text files and normalize line endings, ensuring CRLF on checkout and in archives
+* text=auto eol=crlf
 
 # Batch files must always use CRLF line endings
 *.bat text eol=crlf
