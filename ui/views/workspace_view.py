@@ -998,8 +998,14 @@ def render_workspace():
                     """,
                     unsafe_allow_html=True
                 )
-                with st.spinner("⏳ Вилучення змінних з шаблону..."):
-                    placeholders = extract_placeholders_with_context(actual_t_path)
+                # Use session state cache for placeholders to avoid resetting st.data_editor on every rerun
+                if st.session_state.get("last_loaded_template_path") != actual_t_path:
+                    with st.spinner("⏳ Вилучення змінних з шаблону..."):
+                        placeholders = extract_placeholders_with_context(actual_t_path)
+                    st.session_state["last_loaded_template_path"] = actual_t_path
+                    st.session_state["template_placeholders"] = placeholders
+                else:
+                    placeholders = st.session_state.get("template_placeholders", {})
                     
                 if not placeholders:
                     st.info("У цьому шаблоні не знайдено змінних у форматі {{ змінна }}.")
@@ -1088,6 +1094,10 @@ def render_workspace():
                                     renamed_configs_count = len(saved_cfg_paths)
 
                             if renamed_count > 0:
+                                # Clear the placeholder cache so they will be re-scanned from the modified file on next rerun
+                                st.session_state["last_loaded_template_path"] = None
+                                st.session_state["template_placeholders"] = {}
+                                
                                 msg = f"✅ Перейменовано {renamed_count} змінних у шаблоні!"
                                 if renamed_configs_count > 0:
                                     msg += f" Оновлено {renamed_configs_count} конфіг(ів)!"
