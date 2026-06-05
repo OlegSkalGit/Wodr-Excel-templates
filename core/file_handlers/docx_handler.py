@@ -53,13 +53,12 @@ def get_formatting_chunks(p):
     return chunks
 
 def consolidate_paragraph_tags(p):
-    runs = [r for r in p.runs if r.text]
-    text = "".join(r.text for r in runs)
+    text = p.text
     if '{{' not in text or '}}' not in text: return
     matches = list(re.finditer(r'\{\{.*?\}\}', text))
     if not matches: return
     char_to_run = []
-    for r_idx, r in enumerate(runs):
+    for r_idx, r in enumerate(p.runs):
         for _ in range(len(r.text)):
             char_to_run.append((r_idx, r))
     if len(char_to_run) != len(text): return
@@ -79,20 +78,18 @@ def consolidate_paragraph_tags(p):
             first_run = unique_runs[0]
             last_run = unique_runs[-1]
             
-            first_run_start = sum(len(runs[i].text) for i in range(first_run_idx))
-            last_run_start = sum(len(runs[i].text) for i in range(last_run_idx))
+            first_run_start = sum(len(p.runs[i].text) for i in range(first_run_idx))
+            last_run_start = sum(len(p.runs[i].text) for i in range(last_run_idx))
             
             prefix = first_run.text[:start_idx - first_run_start]
             suffix = last_run.text[end_idx - last_run_start:]
             
             first_run.text = prefix + tag_text
             for other_idx in range(first_run_idx + 1, last_run_idx):
-                runs[other_idx].text = ""
+                p.runs[other_idx].text = ""
             last_run.text = suffix
-            
-            text = "".join(r.text for r in runs)
             char_to_run = []
-            for r_idx, r in enumerate(runs):
+            for r_idx, r in enumerate(p.runs):
                 for _ in range(len(r.text)):
                     char_to_run.append((r_idx, r))
             if len(char_to_run) != len(text): break
