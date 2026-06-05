@@ -65,10 +65,8 @@ def rename_placeholder_in_template(template_path, old_name, new_name):
             if modified:
                 doc.save(template_path)
                 return True
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            st.error(f"Помилка при перейменуванні в Word шаблоні: {e}. Можливо, файл відкритий в іншій програмі.")
+        except Exception:
+            pass
             
     elif ext == ".xlsx":
         import openpyxl
@@ -92,10 +90,8 @@ def rename_placeholder_in_template(template_path, old_name, new_name):
             if modified:
                 wb.save(template_path)
                 return True
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            st.error(f"Помилка при перейменуванні в Excel шаблоні: {e}. Можливо, файл відкритий в іншій програмі.")
+        except Exception:
+            pass
     return False
 
 def extract_placeholders_with_context(template_path):
