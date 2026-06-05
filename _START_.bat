@@ -84,4 +84,4 @@ echo.
 echo Все готово до запуску!
 echo Запуск веб-інтерфейсу...
 echo.
-.venv\Scripts\python.exe -m streamlit run app.py
+.venv\Scripts\streamlit run app.py
