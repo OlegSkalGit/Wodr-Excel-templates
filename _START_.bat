@@ -82,6 +82,6 @@ endlocal
 REM 5. Запуск Streamlit
 echo.
 echo Все готово до запуску!
-echo Запуск веб-інтерфейсу...
+echo Запуск додатку...
 echo.
 ".venv\Scripts\streamlit" run "app.py"
