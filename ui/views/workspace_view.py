@@ -123,7 +123,7 @@ def move_autopilot_outputs(dest_dir):
     try:
         dest_dir = os.path.abspath(dest_dir)
         os.makedirs(dest_dir, exist_ok=True)
-        for filename in ["Auto_Config.xlsx", "Auto_Run_All.bat", "_NODublicate_config.xlsx"]:
+        for filename in ["config_Auto.xlsx", "Auto_Run_All.bat", "config__NODublicate_.xlsx"]:
             src = os.path.join(os.getcwd(), filename)
             if os.path.exists(src):
                 shutil.move(src, os.path.join(dest_dir, filename))
@@ -142,15 +142,15 @@ def move_autopilot_outputs(dest_dir):
                 moved_count += 1
                 
         dest_bat = os.path.join(dest_dir, "Auto_Run_All.bat")
-        dest_cfg = os.path.join(dest_dir, "Auto_Config.xlsx")
+        dest_cfg = os.path.join(dest_dir, "config_Auto.xlsx")
         if os.path.exists(dest_bat) and os.path.exists(dest_cfg):
             recreate_bat_file(dest_bat, dest_cfg)
             
         toast_msg = f"✅ Результати аналізу перенесено в: {dest_dir}"
-        if os.path.exists(os.path.join(dest_dir, "Auto_Config.xlsx")):
+        if os.path.exists(os.path.join(dest_dir, "config_Auto.xlsx")):
             toast_msg += f" (переміщено {moved_count} шаблонів)"
-        if os.path.exists(os.path.join(dest_dir, "_NODublicate_config.xlsx")):
-            toast_msg += " (створено _NODublicate_config.xlsx)"
+        if os.path.exists(os.path.join(dest_dir, "config__NODublicate_.xlsx")):
+            toast_msg += " (створено config__NODublicate_.xlsx)"
         st.toast(toast_msg, icon="📁")
     except Exception as e:
         st.error(f"Помилка при перенесенні файлів результатів: {e}")
@@ -167,7 +167,7 @@ def move_batch_outputs(sample_path, dest_dir):
         
         files_to_move = [
             f"template_{base_name}{ext}",
-            f"{base_name}_config.xlsx",
+            f"config_{base_name}.xlsx",
             f"{base_name}_run_all.bat"
         ]
         moved_count = 0
@@ -178,7 +178,7 @@ def move_batch_outputs(sample_path, dest_dir):
                 moved_count += 1
                 
         dest_bat = os.path.join(dest_dir, f"{base_name}_run_all.bat")
-        dest_cfg = os.path.join(dest_dir, f"{base_name}_config.xlsx")
+        dest_cfg = os.path.join(dest_dir, f"config_{base_name}.xlsx")
         if os.path.exists(dest_bat) and os.path.exists(dest_cfg):
             recreate_bat_file(dest_bat, dest_cfg)
             
@@ -198,7 +198,7 @@ def move_pairwise_outputs(file1_path, dest_dir):
         
         files_to_move = [
             f"template_{base_name}{ext}",
-            f"{base_name}_config.xlsx",
+            f"config_{base_name}.xlsx",
             f"{base_name}_run_all.bat"
         ]
         moved_count = 0
@@ -209,7 +209,7 @@ def move_pairwise_outputs(file1_path, dest_dir):
                 moved_count += 1
                 
         dest_bat = os.path.join(dest_dir, f"{base_name}_run_all.bat")
-        dest_cfg = os.path.join(dest_dir, f"{base_name}_config.xlsx")
+        dest_cfg = os.path.join(dest_dir, f"config_{base_name}.xlsx")
         if os.path.exists(dest_bat) and os.path.exists(dest_cfg):
             recreate_bat_file(dest_bat, dest_cfg)
             
@@ -397,7 +397,7 @@ def render_workspace():
             </p>
             <ul style="margin-bottom: 0; padding-left: 1.5rem; font-size: 0.9rem; line-height: 1.5;">
                 <li><b>Побудова файлової структури:</b> Система сканує цю папку для відображення інтерактивного дерева файлів у боковому меню ліворуч.</li>
-                <li><b>Пошук конфігів та шаблонів:</b> Додаток автоматично знаходить усі наявні файли конфігурацій (наприклад, <code>Auto_Config.xlsx</code>) та шаблони в межах обраної папки.</li>
+                <li><b>Пошук конфігів та шаблонів:</b> Додаток автоматично знаходить усі наявні файли конфігурацій (наприклад, <code>config_Auto.xlsx</code>) та шаблони в межах обраної папки.</li>
                 <li><b>Відносне збереження результатів:</b> Усі відносні шляхи до шаблонів та згенерованих документів (параметр <code>rel_dir</code>) вираховуються відносно цієї папки. Це дозволяє переносити проект на будь-який інший комп'ютер без втрати зв'язків.</li>
             </ul>
         </div>
@@ -680,7 +680,7 @@ def render_workspace():
                     value=False,
                     key="chk_ignore_single"
                 )
-                st.caption("ℹ️ *Якщо активовано, одиничні файли (без дублікатів) не оброблятимуться. Якщо вимкнено, файли будуть винесені в окремий конфіг _NODublicate_config.xlsx та папку _NODublicate_ у папці результатів і додаватимуться як окремі аркуші в конфігу.*")
+                st.caption("ℹ️ *Якщо активовано, одиничні файли (без дублікатів) не оброблятимуться. Якщо вимкнено, файли будуть винесені в окремий конфіг config__NODublicate_.xlsx та папку _NODublicate_ у папці результатів і додаватимуться як окремі аркуші в конфігу.*")
                 st.write(" ")
                 
                 if st.button("🚀 Запустити аналіз", key="btn_run_autopilot", type="primary", use_container_width=True):
