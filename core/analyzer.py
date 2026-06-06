@@ -663,7 +663,7 @@ def run_compare_two(f1, f2):
     f1_a = os.path.abspath(files[0])
     f_dir, f_name = os.path.dirname(f1_a), os.path.splitext(os.path.basename(f1_a))[0]
     t_o = os.path.join(f_dir, f"template_{f_name}{ext}")
-    m_x = os.path.join(f_dir, f"{f_name}_config.xlsx")
+    m_x = os.path.join(f_dir, f"config_{f_name}.xlsx")
     b_o = os.path.join(f_dir, f"{f_name}_run_all.bat")
     print(f"Аналіз 2 файлів (Режим: Порівняння)...")
     try:
@@ -703,7 +703,7 @@ def run_package(sample, folder):
     sample_a = os.path.abspath(files[0])
     f_dir, f_name = os.path.dirname(sample_a), os.path.splitext(os.path.basename(sample_a))[0]
     t_o = os.path.join(f_dir, f"template_{f_name}{ext}")
-    m_x = os.path.join(f_dir, f"{f_name}_config.xlsx")
+    m_x = os.path.join(f_dir, f"config_{f_name}.xlsx")
     b_o = os.path.join(f_dir, f"{f_name}_run_all.bat")
     print(f"Аналіз {len(files)} файлів (Режим: Пакетний)...")
     try:
@@ -838,13 +838,13 @@ def run_full_auto(folder, ignore_single=False):
             traceback.print_exc()
             
     if nodup_results:
-        m_p_nodup = save_master_config(os.path.join(out_dir, "_NODublicate_config.xlsx"), nodup_results, relative_to_folder=folder)
+        m_p_nodup = save_master_config(os.path.join(out_dir, "config__NODublicate_.xlsx"), nodup_results, relative_to_folder=folder)
         print(f"Створено окремий конфіг для одиничних файлів: {m_p_nodup}")
         
     if not results:
-        print("Не вдалося створити жодного шаблону в Auto_Config.xlsx (або змінні відсутні).")
+        print("Не вдалося створити жодного шаблону в config_Auto.xlsx (або змінні відсутні).")
         return
         
-    m_p = save_master_config(os.path.join(out_dir, "Auto_Config.xlsx"), results, relative_to_folder=folder)
+    m_p = save_master_config(os.path.join(out_dir, "config_Auto.xlsx"), results, relative_to_folder=folder)
     create_bat_file(os.path.join(out_dir, "Auto_Run_All.bat"), m_p)
     print(f"\nГотово!\nСтворено конфіг: {m_p}\nОброблено груп: {len(results)}")
