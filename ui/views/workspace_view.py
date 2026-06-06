@@ -123,10 +123,18 @@ def move_autopilot_outputs(dest_dir):
     try:
         dest_dir = os.path.abspath(dest_dir)
         os.makedirs(dest_dir, exist_ok=True)
-        for filename in ["Auto_Config.xlsx", "Auto_Run_All.bat"]:
+        for filename in ["Auto_Config.xlsx", "Auto_Run_All.bat", "_NODublicate_config.xlsx"]:
             src = os.path.join(os.getcwd(), filename)
             if os.path.exists(src):
                 shutil.move(src, os.path.join(dest_dir, filename))
+                
+        nodup_src = os.path.join(os.getcwd(), "_NODublicate_")
+        if os.path.exists(nodup_src) and os.path.isdir(nodup_src):
+            nodup_dest = os.path.join(dest_dir, "_NODublicate_")
+            if os.path.exists(nodup_dest):
+                shutil.rmtree(nodup_dest)
+            shutil.move(nodup_src, nodup_dest)
+            
         moved_count = 0
         for filename in os.listdir(os.getcwd()):
             if filename.startswith("template_") and os.path.isfile(filename):
@@ -138,7 +146,12 @@ def move_autopilot_outputs(dest_dir):
         if os.path.exists(dest_bat) and os.path.exists(dest_cfg):
             recreate_bat_file(dest_bat, dest_cfg)
             
-        st.toast(f"✅ Результати аналізу перенесено в: {dest_dir} (переміщено {moved_count} шаблонів)", icon="📁")
+        toast_msg = f"✅ Результати аналізу перенесено в: {dest_dir}"
+        if os.path.exists(os.path.join(dest_dir, "Auto_Config.xlsx")):
+            toast_msg += f" (переміщено {moved_count} шаблонів)"
+        if os.path.exists(os.path.join(dest_dir, "_NODublicate_config.xlsx")):
+            toast_msg += " (створено _NODublicate_config.xlsx)"
+        st.toast(toast_msg, icon="📁")
     except Exception as e:
         st.error(f"Помилка при перенесенні файлів результатів: {e}")
 
@@ -662,12 +675,23 @@ def render_workspace():
             st.write(" ")
             
             if "Повний автопілот" in mode:
+                st.checkbox(
+                    "Ігнорувати одиничні файли",
+                    value=False,
+                    key="chk_ignore_single"
+                )
+                st.caption("ℹ️ *Якщо активовано, одиничні файли (без дублікатів) не оброблятимуться. Якщо вимкнено, файли будуть винесені в окремий конфіг _NODublicate_config.xlsx та папку _NODublicate_ у папці результатів і додаватимуться як окремі аркуші в конфігу.*")
+                st.write(" ")
+                
                 if st.button("🚀 Запустити аналіз", key="btn_run_autopilot", type="primary", use_container_width=True):
                     f_path = st.session_state.get("txt_auto_folder")
                     if not f_path or not os.path.exists(f_path):
                         st.error("Вкажіть дійсну папку!")
                     else:
-                        ret_code, _ = run_subprocess_and_stream([f_path])
+                        args = [f_path]
+                        if st.session_state.get("chk_ignore_single"):
+                            args.append("--ignore-single")
+                        ret_code, _ = run_subprocess_and_stream(args)
                         if ret_code == 0 and st.session_state.get("analysis_output_dir"):
                             move_autopilot_outputs(st.session_state["analysis_output_dir"])
                         st.rerun()
