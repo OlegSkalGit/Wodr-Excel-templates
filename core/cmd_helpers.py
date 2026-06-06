@@ -16,10 +16,16 @@ def heal_cmd_string(s):
 
 def main():
     args = [heal_cmd_string(arg) for arg in sys.argv[1:]]
+    
+    ignore_single = False
+    if "--ignore-single" in args:
+        ignore_single = True
+        args.remove("--ignore-single")
+        
     if len(args) == 0:
         print("Використання СИСТЕМИ _templates_machine_:")
         print("  [СТВОРЕННЯ ШАБЛОНІВ ТА КОНФІГІВ]")
-        print("  1. Повний автопілот: python _templates_machine_.py <папка>")
+        print("  1. Повний автопілот: python _templates_machine_.py <папка> [--ignore-single]")
         print("  2. Пакетний режим:   python _templates_machine_.py <файл_зразок> <папка>")
         print("  3. Порівняння двох:  python _templates_machine_.py <файл_1> <файл_2>\n")
         print("  [ГЕНЕРАЦІЯ ГОТОВИХ ДОКУМЕНТІВ]")
@@ -29,7 +35,7 @@ def main():
     arg1 = args[0]
     
     if len(args) == 1 and os.path.isdir(arg1):
-        run_full_auto(arg1)
+        run_full_auto(arg1, ignore_single=ignore_single)
         return
         
     if len(args) == 2 and os.path.isfile(arg1) and os.path.isdir(args[1]):

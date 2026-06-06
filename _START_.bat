@@ -62,7 +62,7 @@ REM 3. Перевірка наявності необхідних бібліотек
 .venv\Scripts\python.exe -c "import streamlit, pandas, openpyxl, docxtpl" >nul 2>nul
 if %ERRORLEVEL% neq 0 (
     echo Необхідні бібліотеки Python НЕ знайдено у проекті. Завантажуємо і встановлюємо...
-    .venv\Scripts\pip install streamlit pandas openpyxl docxtpl
+    .venv\Scripts\pip install -r requirements.txt
     if !ERRORLEVEL! == 1 (
         echo.
         echo ===============================================================================================
@@ -84,4 +84,4 @@ echo.
 echo Все готово до запуску!
 echo Запуск веб-інтерфейсу...
 echo.
-.venv\Scripts\streamlit run app.py
+".venv\Scripts\streamlit" run "app.py"

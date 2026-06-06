@@ -746,7 +746,7 @@ def wb_sheetname_by_idx(filepath, idx):
         pass
     return f"Sheet {idx+1}"
 
-def run_full_auto(folder):
+def run_full_auto(folder, ignore_single=False):
     print(f"Сканування папки: {folder} (Режим: Повний автопілот)...")
     groups = {}
     for root, _, fs in os.walk(folder):
@@ -794,11 +794,28 @@ def run_full_auto(folder):
     print("\n" + "="*60 + "\n")
     
     results = []
+    nodup_results = []
     out_dir = os.getcwd()
+    import shutil
+    
     for key, files in groups.items():
         if len(files) < 2:
-            print(f"Група з файлом {os.path.basename(files[0])} має лише один файл, пропускаємо.")
-            continue
+            if ignore_single:
+                print(f"Група з файлом {os.path.basename(files[0])} має лише один файл, пропускаємо.")
+                continue
+            else:
+                f = files[0]
+                print(f"Група з файлом {os.path.basename(f)} має лише один файл. Додаємо до списку без дублікатів (_NODublicate_).")
+                try:
+                    nodup_dir = os.path.join(out_dir, "_NODublicate_")
+                    os.makedirs(nodup_dir, exist_ok=True)
+                    shutil.copy2(f, nodup_dir)
+                    dest_template_abs = os.path.abspath(os.path.join(nodup_dir, os.path.basename(f)))
+                    nodup_results.append((files, dest_template_abs, [{}], 0))
+                except Exception as e:
+                    print(f"Помилка при копіюванні {os.path.basename(f)}: {e}")
+                continue
+                
         ext = os.path.splitext(files[0])[1].lower()
         files = sort_files_by_complexity(files, ext)
         base_name = os.path.splitext(os.path.basename(files[0]))[0]
@@ -819,9 +836,15 @@ def run_full_auto(folder):
             import traceback
             print(f"  - Помилка: {e}")
             traceback.print_exc()
+            
+    if nodup_results:
+        m_p_nodup = save_master_config(os.path.join(out_dir, "_NODublicate_config.xlsx"), nodup_results, relative_to_folder=folder)
+        print(f"Створено окремий конфіг для одиничних файлів: {m_p_nodup}")
+        
     if not results:
-        print("Не вдалося створити жодного шаблону (або змінні відсутні).")
+        print("Не вдалося створити жодного шаблону в Auto_Config.xlsx (або змінні відсутні).")
         return
+        
     m_p = save_master_config(os.path.join(out_dir, "Auto_Config.xlsx"), results, relative_to_folder=folder)
     create_bat_file(os.path.join(out_dir, "Auto_Run_All.bat"), m_p)
     print(f"\nГотово!\nСтворено конфіг: {m_p}\nОброблено груп: {len(results)}")
