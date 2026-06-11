@@ -69,7 +69,7 @@ def resolve_virtual_doc_name(pattern, row_data, template_path):
     result = str(pattern)
     for key, val in variables.items():
         pattern_re = r"\{\{\s*" + re.escape(key) + r"\s*\}\}"
-        result = re.sub(pattern_re, str(val), result)
+        result = re.sub(pattern_re, lambda _, v=val: str(v), result)
         
     result = clean_relative_path(result)
     

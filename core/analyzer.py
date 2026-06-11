@@ -654,14 +654,16 @@ def sort_files_by_complexity(files, ext):
             return 0
     return sorted(files, key=get_complexity, reverse=True)
 
-def run_compare_two(f1, f2):
+def run_compare_two(f1, f2, output_dir=None):
     ext = os.path.splitext(f1)[1].lower()
     if ext not in ['.docx', '.xlsx'] or os.path.splitext(f2)[1].lower() != ext:
         print("Помилка: Файли повинні мати однакове розширення (.docx або .xlsx).")
         return
     files = sort_files_by_complexity([f1, f2], ext)
     f1_a = os.path.abspath(files[0])
-    f_dir, f_name = os.path.dirname(f1_a), os.path.splitext(os.path.basename(f1_a))[0]
+    f_dir = os.path.abspath(output_dir) if output_dir else os.path.dirname(f1_a)
+    os.makedirs(f_dir, exist_ok=True)
+    f_name = os.path.splitext(os.path.basename(f1_a))[0]
     t_o = os.path.join(f_dir, f"template_{f_name}{ext}")
     m_x = os.path.join(f_dir, f"config_{f_name}.xlsx")
     b_o = os.path.join(f_dir, f"{f_name}_run_all.bat")
@@ -680,7 +682,7 @@ def run_compare_two(f1, f2):
             print(f"\nУспішно!\nШаблон: {t_p}\nКонфіг: {m_p}")
     except Exception as e: print(f"Помилка: {e}")
 
-def run_package(sample, folder):
+def run_package(sample, folder, output_dir=None):
     ext = os.path.splitext(sample)[1].lower()
     sample_key = get_structure_key(sample, ext)
     if not sample_key:
@@ -701,7 +703,9 @@ def run_package(sample, folder):
         return
     files = sort_files_by_complexity(files, ext)
     sample_a = os.path.abspath(files[0])
-    f_dir, f_name = os.path.dirname(sample_a), os.path.splitext(os.path.basename(sample_a))[0]
+    f_dir = os.path.abspath(output_dir) if output_dir else os.path.dirname(sample_a)
+    os.makedirs(f_dir, exist_ok=True)
+    f_name = os.path.splitext(os.path.basename(sample_a))[0]
     t_o = os.path.join(f_dir, f"template_{f_name}{ext}")
     m_x = os.path.join(f_dir, f"config_{f_name}.xlsx")
     b_o = os.path.join(f_dir, f"{f_name}_run_all.bat")
@@ -746,7 +750,7 @@ def wb_sheetname_by_idx(filepath, idx):
         pass
     return f"Sheet {idx+1}"
 
-def run_full_auto(folder, ignore_single=False):
+def run_full_auto(folder, ignore_single=False, output_dir=None):
     print(f"Сканування папки: {folder} (Режим: Повний автопілот)...")
     groups = {}
     for root, _, fs in os.walk(folder):
@@ -795,7 +799,8 @@ def run_full_auto(folder, ignore_single=False):
     
     results = []
     nodup_results = []
-    out_dir = os.getcwd()
+    out_dir = os.path.abspath(output_dir) if output_dir else os.getcwd()
+    os.makedirs(out_dir, exist_ok=True)
     import shutil
     
     for key, files in groups.items():
