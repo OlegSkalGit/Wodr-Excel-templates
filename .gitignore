@@ -1,9 +1,6 @@
 .BAK/
 __pycache__/
 .venv/
-.venv_/
 *.pyc
 .last_state.json
-app_BAK.py
-save_error.log
 *.log
