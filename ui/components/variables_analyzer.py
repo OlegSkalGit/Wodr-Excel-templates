@@ -102,6 +102,30 @@ def render_variables_analyzer(pm_path):
 
     with col_left:
         st.markdown("##### 🔑 Змінні проекту")
+        filter_val = st.text_input("Фільтр за значенням змінної:", key="va_value_filter")
+        
+        # Apply filtering to df based on variable values containing the filter string (case-insensitive)
+        if filter_val:
+            filter_val_lower = filter_val.lower()
+            matching_vars = []
+            for var_name in df["Змінна"]:
+                found = False
+                for col_name, details in config_details.items():
+                    if var_name in details["headers"]:
+                        for r in details["rows"]:
+                            val = r.get(var_name)
+                            if val is not None and filter_val_lower in str(val).lower():
+                                found = True
+                                break
+                    if found:
+                        break
+                if found:
+                    matching_vars.append(var_name)
+            df = df[df["Змінна"].isin(matching_vars)].reset_index(drop=True)
+            if selected_var and selected_var not in matching_vars:
+                selected_var = None
+                st.session_state["va_last_selected_var"] = None
+                
         left_df = df[["Змінна"]]
         
         # Visually highlight the selected variable row in the left table
@@ -145,6 +169,22 @@ def render_variables_analyzer(pm_path):
             # Only include columns (sheets) that actually contain the selected variable
             relevant_columns = [col for col in columns_list if selected_var in config_details[col]["headers"]]
             
+            # Filter columns based on the filter_val
+            filter_val = st.session_state.get("va_value_filter", "")
+            if filter_val:
+                filter_val_lower = filter_val.lower()
+                filtered_columns = []
+                for col in relevant_columns:
+                    found = False
+                    for r in config_details[col]["rows"]:
+                        val = r.get(selected_var)
+                        if val is not None and filter_val_lower in str(val).lower():
+                            found = True
+                            break
+                    if found:
+                        filtered_columns.append(col)
+                relevant_columns = filtered_columns
+                
             max_rows = max((len(config_details[col]["rows"]) for col in relevant_columns), default=0)
             vals_data = []
             for r_idx in range(max_rows):
