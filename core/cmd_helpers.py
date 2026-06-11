@@ -26,8 +26,8 @@ def main():
         print("Використання СИСТЕМИ _templates_machine_:")
         print("  [СТВОРЕННЯ ШАБЛОНІВ ТА КОНФІГІВ]")
         print("  1. Повний автопілот: python _templates_machine_.py <папка> [--ignore-single]")
-        print("  2. Пакетний режим:   python _templates_machine_.py <файл_зразок> <папка>")
-        print("  3. Порівняння двох:  python _templates_machine_.py <файл_1> <файл_2>\n")
+        print("  2. Пакетний режим:   python _templates_machine_.py <файл_зразок> <папка> [папка_результатів]")
+        print("  3. Порівняння двох:  python _templates_machine_.py <файл_1> <файл_2> [папка_результатів]\n")
         print("  [ГЕНЕРАЦІЯ ГОТОВИХ ДОКУМЕНТІВ]")
         print("  4. Запуск генерації: python _templates_machine_.py <файл_конфігу.xlsx> [аркуш] [рядок] [папка_вихідних_файлів]")
         return
