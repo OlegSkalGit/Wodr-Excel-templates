@@ -702,9 +702,11 @@ def render_workspace():
                     if not sample or not os.path.exists(sample) or not f_path or not os.path.exists(f_path):
                         st.error("Перевірте шляхи до файлу-зразка та папки!")
                     else:
-                        ret_code, _ = run_subprocess_and_stream([sample, f_path])
-                        if ret_code == 0 and st.session_state.get("analysis_output_dir"):
-                            move_batch_outputs(sample, st.session_state["analysis_output_dir"])
+                        args = [sample, f_path]
+                        out_dir = st.session_state.get("analysis_output_dir")
+                        if out_dir:
+                            args.append(out_dir)
+                        run_subprocess_and_stream(args)
                         st.rerun()
             elif "Попарне порівняння" in mode:
                 if st.button("🚀 Запустити аналіз", key="btn_run_pairwise", type="primary", use_container_width=True):
@@ -713,9 +715,11 @@ def render_workspace():
                     if not file1 or not os.path.exists(file1) or not file2 or not os.path.exists(file2):
                         st.error("Вкажіть обидва файли для порівняння!")
                     else:
-                        ret_code, _ = run_subprocess_and_stream([file1, file2])
-                        if ret_code == 0 and st.session_state.get("analysis_output_dir"):
-                            move_pairwise_outputs(file1, st.session_state["analysis_output_dir"])
+                        args = [file1, file2]
+                        out_dir = st.session_state.get("analysis_output_dir")
+                        if out_dir:
+                            args.append(out_dir)
+                        run_subprocess_and_stream(args)
                         st.rerun()
                         
             st.write(" ")

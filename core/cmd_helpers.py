@@ -34,16 +34,19 @@ def main():
         
     arg1 = args[0]
     
-    if len(args) == 1 and os.path.isdir(arg1):
-        run_full_auto(arg1, ignore_single=ignore_single)
+    if len(args) >= 1 and os.path.isdir(arg1):
+        out_dir = args[1] if len(args) > 1 else None
+        run_full_auto(arg1, ignore_single=ignore_single, output_dir=out_dir)
         return
         
-    if len(args) == 2 and os.path.isfile(arg1) and os.path.isdir(args[1]):
-        run_package(arg1, args[1])
+    if len(args) >= 2 and os.path.isfile(arg1) and os.path.isdir(args[1]):
+        out_dir = args[2] if len(args) > 2 else None
+        run_package(arg1, args[1], out_dir)
         return
         
-    if len(args) == 2 and os.path.isfile(arg1) and os.path.isfile(args[1]):
-        run_compare_two(arg1, args[1])
+    if len(args) >= 2 and os.path.isfile(arg1) and os.path.isfile(args[1]):
+        out_dir = args[2] if len(args) > 2 else None
+        run_compare_two(arg1, args[1], out_dir)
         return
         
     if arg1.lower().endswith('.xlsx') and os.path.isfile(arg1):
