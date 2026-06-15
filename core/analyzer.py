@@ -549,14 +549,15 @@ def compare_excel_group(files, template_out, relative_to_folder=None):
         st = wb_t.worksheets[i]
         rows_per_doc = [list(wb.worksheets[i].iter_rows()) for wb in wbs_d]
         base_rows = rows_per_doc[0]
-        alignments_rows = [{j: j for j in range(len(base_rows))}]
+        alignments_rows = [{j: [j] for j in range(len(base_rows))}]
         for f_idx in range(1, len(files)):
             alignments_rows.append(align_blocks(base_rows, rows_per_doc[f_idx], lambda r: "".join(str(c.value or "") for c in r) if r else ""))
 
         for r_idx in range(len(base_rows)):
             r_list = []
             for f_idx in range(len(files)):
-                comp_idx = alignments_rows[f_idx].get(r_idx)
+                comp_indices = alignments_rows[f_idx].get(r_idx, [])
+                comp_idx = comp_indices[0] if comp_indices else None
                 comp_rows = rows_per_doc[f_idx]
                 if comp_idx is not None and comp_idx < len(comp_rows):
                     r_list.append(comp_rows[comp_idx])
