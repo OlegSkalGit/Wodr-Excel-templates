@@ -1,6 +1,6 @@
-example/
 .BAK/
 __pycache__/
+example/
 .venv/
 *.pyc
 .last_state.json
