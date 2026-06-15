@@ -26,31 +26,20 @@ def find_all_vars_in_slot(strings, diff_map, v_idx, char_to_props=None):
         if s0 == si: continue
         toki = tokenize(str(si or ""))
         sm = difflib.SequenceMatcher(None, tok0, toki)
-        raw_ops = sm.get_opcodes()
-        smooth_ops = []
-        for i in range(len(raw_ops)):
-            tag, i1, i2, j1, j2 = raw_ops[i]
-            if tag == 'equal':
-                text = "".join(toki[j1:j2])
-                if 0 < i < len(raw_ops)-1 and len(text) < 3:
-                    should_merge = True
-                    if char_to_props is not None:
-                        prev_op = raw_ops[i-1]
-                        next_op = raw_ops[i+1]
-                        start_char = tok_char_idx[prev_op[1]]
-                        end_char = tok_char_idx[next_op[2]] if next_op[2] < len(tok_char_idx) else len(char_to_props)
-                        props_slice = char_to_props[start_char:end_char]
-                        if props_slice:
-                            should_merge = (len(set(props_slice)) <= 1)
-                    if should_merge:
-                        tag = 'replace'
-            smooth_ops.append((tag, i1, i2, j1, j2))
-        for tag, i1, i2, j1, j2 in smooth_ops:
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
             if tag != 'equal':
+                diff_0 = "".join(tok0[i1:i2])
+                diff_i = "".join(toki[j1:j2])
+                if not diff_0.strip() and not diff_i.strip():
+                    continue
                 if tag == 'insert':
                     if i1 < len(tok0): is_var[i1] = True
                     elif i1 > 0: is_var[i1 - 1] = True
                 for k in range(i1, i2): is_var[k] = True
+            elif tag == 'equal':
+                equal_str = "".join(tok0[i1:i2])
+                if len(equal_str) <= 3 and not equal_str.strip():
+                    for k in range(i1, i2): is_var[k] = True
     var_ranges = []
     i = 0
     while i < len(tok0):
@@ -68,12 +57,33 @@ def find_all_vars_in_slot(strings, diff_map, v_idx, char_to_props=None):
                     i += 1
             else:
                 while i < len(tok0) and is_var[i]: i += 1
+            
+            while start < i and not tok0[start].strip():
+                is_var[start] = False
+                start += 1
+            while i > start and not tok0[i-1].strip():
+                i -= 1
+                is_var[i] = False
+                
+            if start >= i:
+                continue
+                
+            var_text = "".join(tok0[start:i])
+            if len(var_text) <= 2 and not any(c.isalnum() for c in var_text):
+                for k in range(start, i):
+                    is_var[k] = False
+                continue
+            
             var_ranges.append((start, i))
         else: i += 1
-    all_values = [{} for _ in range(len(strings))]
+        
+    valid_var_ranges = []
     template_parts = []
     last_idx = 0
-    for idx, (v_start, v_end) in enumerate(var_ranges):
+    all_values_list = [[] for _ in range(len(strings))]
+    consumed_j_list = [set() for _ in range(len(strings))]
+    
+    for v_start, v_end in var_ranges:
         template_parts.append("".join(tok0[last_idx:v_start]))
         vals = []
         for f_idx, si in enumerate(strings):
@@ -85,20 +95,40 @@ def find_all_vars_in_slot(strings, diff_map, v_idx, char_to_props=None):
                 for tag, i1, i2, j1, j2 in sm.get_opcodes():
                     if tag == 'insert':
                         if v_start <= i1 <= v_end:
-                            val_bits.append("".join(toki[j1:j2]))
+                            unconsumed = [toki[j] for j in range(j1, j2) if j not in consumed_j_list[f_idx]]
+                            val_bits.append("".join(unconsumed))
+                            consumed_j_list[f_idx].update(range(j1, j2))
                     else:
                         o_start = max(i1, v_start)
                         o_end = min(i2, v_end)
                         if o_start < o_end:
                             if tag == 'equal': val_bits.append("".join(tok0[o_start:o_end]))
-                            else: val_bits.append("".join(toki[j1:j2]))
+                            else: 
+                                unconsumed = [toki[j] for j in range(j1, j2) if j not in consumed_j_list[f_idx]]
+                                val_bits.append("".join(unconsumed))
+                                consumed_j_list[f_idx].update(range(j1, j2))
                 val = "".join(val_bits)
             vals.append(val)
-        template_parts.append(f"{{{{VAR_PLACEHOLDER_{idx}}}}}")
-        for f_idx in range(len(strings)): all_values[f_idx][idx] = vals[f_idx]
+            
+        cleaned_vals = [v.strip() for v in vals]
+        if all(not v for v in cleaned_vals):
+            template_parts.append("".join(tok0[v_start:v_end]))
+        else:
+            template_parts.append(f"{{{{VAR_PLACEHOLDER_{len(valid_var_ranges)}}}}}")
+            valid_var_ranges.append((v_start, v_end))
+            for f_idx in range(len(strings)):
+                all_values_list[f_idx].append(cleaned_vals[f_idx])
+                
         last_idx = v_end
+        
     template_parts.append("".join(tok0[last_idx:]))
-    return "".join(template_parts), var_ranges, all_values
+    
+    all_values_dict = [{} for _ in range(len(strings))]
+    for f_idx in range(len(strings)):
+        for idx, val in enumerate(all_values_list[f_idx]):
+            all_values_dict[f_idx][idx] = val
+            
+    return "".join(template_parts), valid_var_ranges, all_values_dict
 
 def get_var_name(vals, diff_map, v_idx_list):
     norm_vals = tuple(get_norm_key(v) for v in vals)
@@ -108,18 +138,76 @@ def get_var_name(vals, diff_map, v_idx_list):
     v_idx_list[0] += 1
     return v_name
 
-def process_paragraph_list(pars_matrix, diff_map, v_idx_list, all_data):
-    num_files = len(pars_matrix)
-    num_pars = min(len(p) for p in pars_matrix)
-    for p_idx in range(num_pars):
-        p_list = [pars_matrix[f_idx][p_idx] for f_idx in range(num_files)]
-        
-        chunk_lists = [get_formatting_chunks(p) for p in p_list]
+def align_blocks(base_items, comp_items, get_text_fn):
+    def norm(txt): return re.sub(r'\s+', '', txt) if txt else ""
+    base_sigs = [norm(get_text_fn(b)) for b in base_items]
+    comp_sigs = [norm(get_text_fn(b)) for b in comp_items]
+    sm = difflib.SequenceMatcher(None, base_sigs, comp_sigs)
+    alignment = {}
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == 'equal':
+            for k in range(i2 - i1): alignment[i1 + k] = [j1 + k]
+        elif tag == 'replace':
+            limit = min(i2 - i1, j2 - j1)
+            for k in range(limit - 1):
+                alignment[i1 + k] = [j1 + k]
+            if i2 - i1 < j2 - j1:
+                alignment[i1 + limit - 1] = list(range(j1 + limit - 1, j2))
+            elif i2 - i1 > j2 - j1:
+                for k in range(limit - 1, i2 - i1):
+                    alignment[i1 + k] = [j1 + limit - 1]
+            else:
+                alignment[i1 + limit - 1] = [j1 + limit - 1]
+    return alignment
+
+def process_paragraph_list(blocks_list_per_file, diff_map, v_idx_list, all_data):
+    num_files = len(blocks_list_per_file)
+    if num_files == 0: return
+    
+    base_blocks = blocks_list_per_file[0]
+    alignments = [{i: [i] for i in range(len(base_blocks))}]
+    for f_idx in range(1, num_files):
+        alignments.append(align_blocks(base_blocks, blocks_list_per_file[f_idx], lambda b: b.text if b else ""))
+
+    def get_combined_chunks(p_items):
+        if not p_items: return []
+        chunks = []
+        for i, p in enumerate(p_items):
+            if i > 0:
+                prev_props = chunks[-1][1] if chunks else None
+                chunks.append(("\n", prev_props))
+            chunks.extend(get_formatting_chunks(p))
+        final_chunks = []
+        if chunks:
+            cur_text, cur_props = chunks[0]
+            for t, p in chunks[1:]:
+                if p == cur_props:
+                    cur_text += t
+                else:
+                    final_chunks.append((cur_text, cur_props))
+                    cur_text = t
+                    cur_props = p
+            final_chunks.append((cur_text, cur_props))
+        return final_chunks
+
+    for p_idx in range(len(base_blocks)):
+        p_list = []
+        for f_idx in range(num_files):
+            a_map = alignments[f_idx]
+            comp_indices = a_map.get(p_idx, [])
+            comp_blocks = blocks_list_per_file[f_idx]
+            
+            valid_blocks = [comp_blocks[i] for i in comp_indices if i < len(comp_blocks)]
+            p_list.append(valid_blocks if valid_blocks else None)
+            
+        chunk_lists = [get_combined_chunks(p_items) if p_items else [] for p_items in p_list]
         can_compare_chunks = all(len(cl) == len(chunk_lists[0]) for cl in chunk_lists) and chunk_lists[0]
 
         if can_compare_chunks:
-            p0 = p_list[0]
+            p0 = p_list[0][0]
             p0.clear()
+            # Clear other base blocks that got mapped to the same index to avoid duplication
+            for extra_p in p_list[0][1:]: extra_p.clear()
             for c_idx in range(len(chunk_lists[0])):
                 chunk_texts = [cl[c_idx][0] for cl in chunk_lists]
                 chunk_props = chunk_lists[0][c_idx][1]
@@ -141,15 +229,19 @@ def process_paragraph_list(pars_matrix, diff_map, v_idx_list, all_data):
                 apply_run_props(run, chunk_props)
             continue
 
-        all_texts = [p.text for p in p_list]
+        all_texts = ["\n".join(x.text for x in p_items) if p_items else "" for p_items in p_list]
         if len(set(all_texts)) == 1: continue
 
-        p0 = p_list[0]
+        p0 = p_list[0][0]
+        for extra_p in p_list[0][1:]: extra_p.clear()
         char_to_props = []
-        for r in p0.runs:
-            props = get_run_props(r)
-            for _ in range(len(r.text)):
-                char_to_props.append(props)
+        for i, p in enumerate(p_list[0]):
+            if i > 0:
+                char_to_props.append(char_to_props[-1] if char_to_props else None)
+            for r in p.runs:
+                props = get_run_props(r)
+                for _ in range(len(r.text)):
+                    char_to_props.append(props)
 
         t_str, var_rs, vals_f = find_all_vars_in_slot(all_texts, diff_map, v_idx_list, char_to_props=char_to_props)
         if not var_rs: continue
@@ -212,28 +304,228 @@ def process_paragraph_list(pars_matrix, diff_map, v_idx_list, all_data):
             run = p0.add_run(text)
             apply_run_props(run, props)
 
-def compare_word_group(files, template_out):
+def optimize_variables(all_data, diff_map, v_idx_list, template_doc=None, template_wb=None):
+    if not all_data or not all_data[0]: return
+    num_files = len(all_data)
+    
+    global_replacement_map = {}
+    
+    while True:
+        var_names = [k for k in all_data[0].keys() if k != "__NAME_PATTERN__"]
+        def max_len(v): return max(len(str(all_data[f].get(v, ""))) for f in range(num_files))
+        var_names.sort(key=max_len, reverse=True)
+        
+        factorized_in_this_pass = False
+        
+        for i, v_big in enumerate(var_names):
+            for j in range(i+1, len(var_names)):
+                v_small = var_names[j]
+                
+                is_substring = True
+                common_idx = None
+                for f in range(num_files):
+                    val_big = str(all_data[f].get(v_big, ""))
+                    val_small = str(all_data[f].get(v_small, ""))
+                    
+                    if len(val_small.strip()) < 2 or not any(c.isalnum() for c in val_small):
+                        is_substring = False; break
+                        
+                    idx = val_big.find(val_small)
+                    if idx == -1:
+                        is_substring = False; break
+                    if common_idx is None: common_idx = idx
+                    elif common_idx != idx:
+                        is_substring = False; break
+                        
+                if is_substring:
+                    prefixes = [str(all_data[f].get(v_big, ""))[:common_idx] for f in range(num_files)]
+                    suffixes = [str(all_data[f].get(v_big, ""))[common_idx+len(str(all_data[f].get(v_small, ""))):] for f in range(num_files)]
+                    
+                    new_template_str = ""
+                    if len(set(prefixes)) > 1:
+                        t_str_p, var_rs_p, vals_f_p = find_all_vars_in_slot(prefixes, diff_map, v_idx_list)
+                        if var_rs_p:
+                            for idx_p in range(len(var_rs_p)):
+                                v_name_p = get_var_name([v[idx_p] for v in vals_f_p], diff_map, v_idx_list)
+                                t_str_p = t_str_p.replace(f"{{{{VAR_PLACEHOLDER_{idx_p}}}}}", f"{{{{{v_name_p}}}}}")
+                                for f_idx in range(num_files): all_data[f_idx][v_name_p] = vals_f_p[f_idx][idx_p]
+                        new_template_str += t_str_p
+                    else:
+                        new_template_str += prefixes[0]
+                        
+                    new_template_str += f"{{{{{v_small}}}}}"
+                    
+                    if len(set(suffixes)) > 1:
+                        t_str_s, var_rs_s, vals_f_s = find_all_vars_in_slot(suffixes, diff_map, v_idx_list)
+                        if var_rs_s:
+                            for idx_s in range(len(var_rs_s)):
+                                v_name_s = get_var_name([v[idx_s] for v in vals_f_s], diff_map, v_idx_list)
+                                t_str_s = t_str_s.replace(f"{{{{VAR_PLACEHOLDER_{idx_s}}}}}", f"{{{{{v_name_s}}}}}")
+                                for f_idx in range(num_files): all_data[f_idx][v_name_s] = vals_f_s[f_idx][idx_s]
+                        new_template_str += t_str_s
+                    else:
+                        new_template_str += suffixes[0]
+                    
+                    global_replacement_map[v_big] = new_template_str
+                    for f in range(num_files):
+                        if v_big in all_data[f]:
+                            del all_data[f][v_big]
+                            
+                    factorized_in_this_pass = True
+                    break
+                    
+            if factorized_in_this_pass:
+                break
+                
+        if not factorized_in_this_pass:
+            break
+            
+    while True:
+        var_names = list(all_data[0].keys())
+        best_pair = None
+        best_score = -1
+        
+        for i in range(len(var_names)):
+            for j in range(i+1, len(var_names)):
+                v1 = var_names[i]
+                v2 = var_names[j]
+                
+                match_count = 0
+                conflict_count = 0
+                for f in range(num_files):
+                    val1 = str(all_data[f].get(v1, "")).strip()
+                    val2 = str(all_data[f].get(v2, "")).strip()
+                    
+                    if val1 == "None": val1 = ""
+                    if val2 == "None": val2 = ""
+                    
+                    if val1 == val2 and val1 != "":
+                        match_count += 1
+                    elif val1 != "" and val2 != "":
+                        if val1 in val2 or val2 in val1:
+                            pass
+                        else:
+                            conflict_count += 1
+                            
+                if match_count >= 2 and conflict_count == 0:
+                    score = match_count
+                    if score > best_score:
+                        best_score = score
+                        best_pair = (v1, v2)
+                        
+        if not best_pair:
+            break
+            
+        v_keep, v_drop = best_pair
+        global_replacement_map[v_drop] = f"{{{{{v_keep}}}}}"
+        
+        for f in range(num_files):
+            val_keep = str(all_data[f].get(v_keep, "")).strip()
+            val_drop = str(all_data[f].get(v_drop, "")).strip()
+            
+            if val_keep == "None": val_keep = ""
+            if val_drop == "None": val_drop = ""
+            
+            if not val_keep and val_drop:
+                all_data[f][v_keep] = val_drop
+            elif val_keep and val_drop and len(val_drop) > len(val_keep):
+                all_data[f][v_keep] = val_drop
+                
+            if v_drop in all_data[f]:
+                del all_data[f][v_drop]
+                
+    if not global_replacement_map: return
+    
+    def resolve(text):
+        changed = True
+        while changed:
+            changed = False
+            for old_var, new_str in global_replacement_map.items():
+                old_str = f"{{{{{old_var}}}}}"
+                if old_str in text:
+                    text = text.replace(old_str, new_str)
+                    changed = True
+        return text
+
+    for v_big in global_replacement_map:
+        global_replacement_map[v_big] = resolve(global_replacement_map[v_big])
+        
+    for v_big, new_str in global_replacement_map.items():
+        old_str = f"{{{{{v_big}}}}}"
+        if template_doc:
+            for p in template_doc.paragraphs:
+                for run in p.runs:
+                    if old_str in run.text: run.text = run.text.replace(old_str, new_str)
+            for t in template_doc.tables:
+                for r in t.rows:
+                    for c in r.cells:
+                        for p in c.paragraphs:
+                            for run in p.runs:
+                                if old_str in run.text: run.text = run.text.replace(old_str, new_str)
+        if template_wb:
+            for ws in template_wb.worksheets:
+                for row in ws.iter_rows():
+                    for cell in row:
+                        if isinstance(cell.value, str) and old_str in cell.value:
+                            cell.value = cell.value.replace(old_str, new_str)
+
+def compare_word_group(files, template_out, relative_to_folder=None):
     docs = [Document(f) for f in files]
     diff_map, v_idx, all_data = {}, [1], [{} for _ in range(len(files))]
     process_paragraph_list([d.paragraphs for d in docs], diff_map, v_idx, all_data)
     processed_cells = set()
-    for t_i in range(min(len(d.tables) for d in docs)):
-        t_list = [d.tables[t_i] for d in docs]
-        for r in range(min(len(t.rows) for t in t_list)):
-            c_len = min(len(t.rows[r].cells) for t in t_list)
+    
+    base_tables = docs[0].tables
+    alignments_tables = [{i: [i] for i in range(len(base_tables))}]
+    for f_idx in range(1, len(docs)):
+        alignments_tables.append(align_blocks(base_tables, docs[f_idx].tables, lambda t: "".join(c.text for r in t.rows for c in r.cells) if t else ""))
+
+    for t_idx in range(len(base_tables)):
+        t_list = []
+        for f_idx in range(len(docs)):
+            comp_indices = alignments_tables[f_idx].get(t_idx, [])
+            comp_idx = comp_indices[0] if comp_indices else None
+            comp_tables = docs[f_idx].tables
+            if comp_idx is not None and comp_idx < len(comp_tables):
+                t_list.append(comp_tables[comp_idx])
+            else:
+                t_list.append(None)
+                
+        base_rows = t_list[0].rows if t_list[0] else []
+        alignments_rows = [{i: [i] for i in range(len(base_rows))}]
+        for f_idx in range(1, len(docs)):
+            comp_rows = t_list[f_idx].rows if t_list[f_idx] else []
+            alignments_rows.append(align_blocks(base_rows, comp_rows, lambda r: "".join(c.text for c in r.cells) if r else ""))
+
+        for r_idx in range(len(base_rows)):
+            r_list = []
+            for f_idx in range(len(docs)):
+                comp_indices = alignments_rows[f_idx].get(r_idx, [])
+                comp_idx = comp_indices[0] if comp_indices else None
+                comp_rows = t_list[f_idx].rows if t_list[f_idx] else []
+                if comp_idx is not None and comp_idx < len(comp_rows):
+                    r_list.append(comp_rows[comp_idx])
+                else:
+                    r_list.append(None)
+                    
+            base_cells = r_list[0].cells if r_list[0] else []
+            c_len = len(base_cells)
             for c in range(c_len):
-                c_list = [t.rows[r].cells[c] for t in t_list]
+                c_list = [r.cells[c] if r and c < len(r.cells) else None for r in r_list]
                 cell_key = tuple(cell._tc if cell is not None else None for cell in c_list)
                 if any(x is None for x in cell_key) or cell_key in processed_cells:
                     continue
                 processed_cells.add(cell_key)
-                if len(set(cell.text for cell in c_list if cell is not None)) > 1:
-                    process_paragraph_list([cell.paragraphs for cell in c_list if cell is not None], diff_map, v_idx, all_data)
+                texts = [cell.text if cell is not None else "" for cell in c_list]
+                if len(set(texts)) > 1:
+                    process_paragraph_list([cell.paragraphs if cell else [] for cell in c_list], diff_map, v_idx, all_data)
+                    
+    optimize_variables(all_data, diff_map, v_idx, template_doc=docs[0])
     t_p = get_unique_path(template_out)
     docs[0].save(t_p)
     return t_p, all_data, v_idx[0]-1
 
-def compare_excel_group(files, template_out):
+def compare_excel_group(files, template_out, relative_to_folder=None):
     wbs_d = [openpyxl.load_workbook(f, data_only=True) for f in files]
     wb_t = openpyxl.load_workbook(files[0])
     for wb in wbs_d:
@@ -254,16 +546,31 @@ def compare_excel_group(files, template_out):
                     for f_idx in range(len(files)): all_data[f_idx][v_name] = vals_f[f_idx][idx]
                 wb_t.worksheets[i].title = t_str
     for i in range(num_sheets):
-        sheets_d = [wb.worksheets[i] for wb in wbs_d]
         st = wb_t.worksheets[i]
-        max_r = max((s.max_row or 1) for s in sheets_d)
-        max_c = max((s.max_column or 1) for s in sheets_d)
-        for r in range(1, max_r + 1):
-            for c in range(1, max_c + 1):
-                cell_t = st.cell(row=r, column=c)
+        rows_per_doc = [list(wb.worksheets[i].iter_rows()) for wb in wbs_d]
+        base_rows = rows_per_doc[0]
+        alignments_rows = [{j: j for j in range(len(base_rows))}]
+        for f_idx in range(1, len(files)):
+            alignments_rows.append(align_blocks(base_rows, rows_per_doc[f_idx], lambda r: "".join(str(c.value or "") for c in r) if r else ""))
+
+        for r_idx in range(len(base_rows)):
+            r_list = []
+            for f_idx in range(len(files)):
+                comp_idx = alignments_rows[f_idx].get(r_idx)
+                comp_rows = rows_per_doc[f_idx]
+                if comp_idx is not None and comp_idx < len(comp_rows):
+                    r_list.append(comp_rows[comp_idx])
+                else:
+                    r_list.append(None)
+                    
+            base_cells = r_list[0] if r_list[0] else []
+            c_len = len(base_cells)
+            for c in range(c_len):
+                c_list = [r[c] if r and c < len(r) else None for r in r_list]
+                cell_t = st.cell(row=r_idx+1, column=c+1)
                 if type(cell_t).__name__ == 'MergedCell': continue
                 if cell_t.data_type == 'f' or (isinstance(cell_t.value, str) and str(cell_t.value).startswith('=')): continue
-                vals = [s.cell(row=r, column=c).value for s in sheets_d]
+                vals = [cell.value if cell else None for cell in c_list]
                 if len(set(vals)) > 1:
                     if not all(isinstance(v, str) for v in vals if v is not None):
                         v_name = get_var_name(vals, diff_map, v_idx)
@@ -277,12 +584,16 @@ def compare_excel_group(files, template_out):
                                 t_str = t_str.replace(f"{{{{VAR_PLACEHOLDER_{idx}}}}}", f"{{{{{v_name}}}}}")
                                 for f_idx in range(len(files)): all_data[f_idx][v_name] = vals_f[f_idx][idx]
                             cell_t.value = t_str
+    
+
+    optimize_variables(all_data, diff_map, v_idx, template_wb=wb_t)
     t_p = get_unique_path(template_out)
     wb_t.save(t_p)
     return t_p, all_data, v_idx[0]-1
 
 def generate_name_template(filenames, all_data):
-    base_names = [os.path.splitext(os.path.basename(f))[0] for f in filenames]
+    import re
+    base_names = filenames
     best_pattern = None
     max_placeholders = 0
     for i in range(len(base_names)):
@@ -293,8 +604,22 @@ def generate_name_template(filenames, all_data):
         placeholders_count = 0
         for k, v in vars_sorted:
             if v in pattern:
-                pattern = pattern.replace(v, f"{{{{{k}}}}}")
-                placeholders_count += 1
+                # Replace v only if it's not inside an existing {{...}} placeholder
+                # We split the string by {{...}} and only replace in the literal parts
+                parts = re.split(r'(\{\{.*?\}\})', pattern)
+                new_parts = []
+                replaced_in_this_step = False
+                for part in parts:
+                    if part.startswith('{{') and part.endswith('}}'):
+                        new_parts.append(part)
+                    else:
+                        if v in part:
+                            part = part.replace(v, f"{{{{{k}}}}}")
+                            replaced_in_this_step = True
+                        new_parts.append(part)
+                if replaced_in_this_step:
+                    pattern = "".join(new_parts)
+                    placeholders_count += 1
         if placeholders_count > max_placeholders:
             max_placeholders = placeholders_count
             best_pattern = pattern
@@ -305,41 +630,34 @@ def populate_config_sheet(ws, path, template_path, filenames, all_data, num_vars
     try: rel_t = os.path.relpath(template_path, os.path.dirname(os.path.abspath(path)))
     except: rel_t = template_path
     
-    name_pattern = generate_name_template(filenames, all_data)
-    
-    has_rel_dir = False
-    has_file_name = False
+    rel_paths = []
     if relative_to_folder and filenames:
-        has_rel_dir = True
-        has_file_name = True
         folder_abs = os.path.abspath(relative_to_folder)
         for i, f in enumerate(filenames):
             try:
                 f_abs = os.path.abspath(f)
                 rel_file = os.path.relpath(f_abs, folder_abs)
-                rel_dir = os.path.dirname(rel_file)
-                rel_dir_clean = rel_dir.replace('\\', '/')
-                if rel_dir_clean == "." or rel_dir_clean == "..":
-                    rel_dir_clean = ""
-                if i < len(all_data):
-                    all_data[i]["rel_dir"] = rel_dir_clean
+                rel_file_no_ext = os.path.splitext(rel_file)[0]
+                rel_paths.append(rel_file_no_ext.replace('\\', '/'))
             except Exception:
-                if i < len(all_data):
-                    all_data[i]["rel_dir"] = ""
-            
-            try:
-                base = os.path.splitext(os.path.basename(f))[0]
-                if i < len(all_data):
-                    all_data[i]["file_name"] = base
-            except Exception:
-                if i < len(all_data):
-                    all_data[i]["file_name"] = ""
+                rel_paths.append(os.path.splitext(os.path.basename(f))[0])
+    else:
+        rel_paths = [os.path.splitext(os.path.basename(f))[0] for f in filenames]
                     
-        # Check if the generated pattern matches all filenames
-        pattern_matches_all = True
+    if all_data and "__NAME_PATTERN__" in all_data[0]:
+        name_pattern = all_data[0]["__NAME_PATTERN__"]
+        for d in all_data:
+            d.pop("__NAME_PATTERN__", None)
+    else:
+        name_pattern = generate_name_template(rel_paths, all_data)
+                
+    # Check if the generated pattern matches all filenames
+    pattern_matches_all = True
+    if relative_to_folder and filenames:
         for i, f in enumerate(filenames):
             try:
-                orig_name = os.path.splitext(os.path.basename(f))[0]
+                rel_file = os.path.relpath(os.path.abspath(f), folder_abs)
+                orig_name = os.path.splitext(rel_file)[0].replace('\\', '/')
                 rendered = render_string_template(name_pattern, all_data[i])
                 if rendered != orig_name:
                     pattern_matches_all = False
@@ -347,40 +665,70 @@ def populate_config_sheet(ws, path, template_path, filenames, all_data, num_vars
             except Exception:
                 pattern_matches_all = False
                 break
-                
-        # If the pattern is a fallback pattern (contains YYYY) or doesn't match all original filenames, replace with file_name
-        if "{{YYYY}}" in name_pattern or not pattern_matches_all:
-            name_pattern = "{{file_name}}"
             
-        name_pattern = f"{{{{rel_dir}}}}/{name_pattern}"
-    else:
-        if filenames:
-            try:
-                first_file_abs = os.path.abspath(filenames[0])
-                config_dir = os.path.dirname(os.path.abspath(path))
-                rel_file = os.path.relpath(first_file_abs, config_dir)
-                rel_dir = os.path.dirname(rel_file)
-                if rel_dir and rel_dir != "." and rel_dir != "..":
-                    rel_dir_clean = rel_dir.replace('\\', '/')
-                    if not rel_dir_clean.startswith('..'):
-                        name_pattern = f"{rel_dir_clean}/{name_pattern}"
-            except: pass
-
+    # If the pattern is a fallback pattern (contains YYYY) or doesn't match all original filenames, replace with file_name
+    if "{{YYYY}}" in name_pattern or not pattern_matches_all:
+        name_pattern = "{{rel_dir}}/{{file_name}}"
+        
+        # Clean up any variables that were created exclusively for the failed name pattern
+        if all_data and "__PATH_ADDED_VARS__" in all_data[0]:
+            path_added_vars = all_data[0]["__PATH_ADDED_VARS__"]
+            for d in all_data:
+                for pv in path_added_vars:
+                    d.pop(pv, None)
+                    
+        if relative_to_folder and filenames:
+            for i, f in enumerate(filenames):
+                try:
+                    rel_file = os.path.relpath(os.path.abspath(f), folder_abs)
+                    rel_dir = os.path.dirname(rel_file).replace('\\', '/')
+                    file_name = os.path.splitext(os.path.basename(f))[0]
+                    if not rel_dir: rel_dir = "."
+                    
+                    # Template rel_dir and file_name
+                    row_data = all_data[i]
+                    vars_sorted = sorted([(k, str(v).strip()) for k, v in row_data.items() if v and len(str(v).strip()) >= 2 and k.startswith('field_')], key=lambda x: len(x[1]), reverse=True)
+                    
+                    def apply_template(text):
+                        for k, v in vars_sorted:
+                            if v in text:
+                                parts = re.split(r'(\{\{.*?\}\})', text)
+                                new_parts = []
+                                for part in parts:
+                                    if part.startswith('{{') and part.endswith('}}'):
+                                        new_parts.append(part)
+                                    else:
+                                        new_parts.append(part.replace(v, f"{{{{{k}}}}}"))
+                                text = "".join(new_parts)
+                        return text
+                        
+                    all_data[i]["rel_dir"] = apply_template(rel_dir)
+                    all_data[i]["file_name"] = apply_template(file_name)
+                except Exception:
+                    pass
+        
     ws['A1'], ws['A2'] = rel_t, name_pattern
     
     headers = []
     style_props = ['bold', 'italic', 'font_size', 'font_name', 'font_color', 'fill', 'alignment', 'border', 'number_format']
-    for i in range(1, num_vars + 1):
-        f_name = f"field_{i}"
+    
+    active_fields = set()
+    for row_dict in all_data:
+        for k in row_dict.keys():
+            if k.startswith("field_") and k[6:].isdigit():
+                active_fields.add(k)
+    active_fields_sorted = sorted(list(active_fields), key=lambda x: int(x[6:]))
+    
+    for f_name in active_fields_sorted:
         headers.append(f_name)
         for prop in style_props:
             prop_key = f"{f_name}_{prop}"
             if any(prop_key in row_dict for row_dict in all_data):
                 headers.append(prop_key)
-    if has_rel_dir:
-        headers.append("rel_dir")
-    if has_file_name:
-        headers.append("file_name")
+    if all_data and "file_name" in all_data[0] and "{{file_name}}" in name_pattern:
+        headers.insert(0, "file_name")
+    if all_data and "rel_dir" in all_data[0] and "{{rel_dir}}" in name_pattern:
+        headers.insert(0, "rel_dir")
         
     for i, h in enumerate(headers): ws.cell(row=4, column=i+1).value = h
     
@@ -652,7 +1000,11 @@ def sort_files_by_complexity(files, ext):
                 return sum(len(str(cell.value or "")) for sheet in wb.worksheets for row in sheet.iter_rows() for cell in row)
         except:
             return 0
-    return sorted(files, key=get_complexity, reverse=True)
+    sorted_files = sorted(files, key=get_complexity, reverse=True)
+    if not sorted_files: return []
+    median_idx = len(sorted_files) // 2
+    median_file = sorted_files.pop(median_idx)
+    return [median_file] + sorted_files
 
 def run_compare_two(f1, f2, output_dir=None):
     ext = os.path.splitext(f1)[1].lower()
@@ -827,8 +1179,8 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
         t_o = os.path.join(out_dir, f"template_{base_name}{ext}")
         print(f"Обробка групи: {base_name} ({len(files)} файлів)...")
         try:
-            if ext == '.docx': t_p, data, n_v = compare_word_group(files, t_o)
-            else: t_p, data, n_v = compare_excel_group(files, t_o)
+            if ext == '.docx': t_p, data, n_v = compare_word_group(files, t_o, folder)
+            else: t_p, data, n_v = compare_excel_group(files, t_o, folder)
             print(f"  - Знайдено змінних: {n_v}")
             if n_v > 0:
                 results.append((files, t_p, data, n_v))

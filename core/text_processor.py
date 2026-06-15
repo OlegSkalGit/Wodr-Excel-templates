@@ -35,10 +35,20 @@ def resolve_path(base_dir, path):
     return os.path.abspath(os.path.join(base_dir, path))
 
 def render_string_template(template_str, variables):
-    result = template_str
-    for key, val in variables.items():
-        pattern = r"\{\{\s*" + re.escape(key) + r"\s*\}\}"
-        result = re.sub(pattern, lambda _: str(val), result)
+    result = str(template_str)
+    changed = True
+    iters = 0
+    max_iters = 20
+    while changed and iters < max_iters:
+        changed = False
+        iters += 1
+        for key, val in variables.items():
+            pattern = r"\{\{\s*" + re.escape(key) + r"\s*\}\}"
+            if re.search(pattern, result):
+                result = re.sub(pattern, lambda _: str(val), result)
+                changed = True
+    if iters >= max_iters:
+        print(f"Попередження: виявлено можливу циклічну рекурсію в шаблоні: {template_str}")
     return result
 
 def get_now_vars():
