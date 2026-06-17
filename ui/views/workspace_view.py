@@ -405,8 +405,8 @@ def render_workspace():
         col_on1, col_on2 = st.columns([3, 1])
         with col_on1:
             st.text_input(
-                "📁 Шлях до робочої папки проекту:",
-                placeholder="Вкажіть шлях до папки (наприклад, example)...",
+                "📁 Шлях до робочої папки (тут зберігатимуться конфіги та шаблони):",
+                placeholder="Вкажіть шлях до папки (наприклад, C:\\Projects\\MyWorkspace)...",
                 key="pm_folder_path",
                 on_change=save_persistent_state
             )
@@ -419,6 +419,25 @@ def render_workspace():
                 use_container_width=True,
                 on_click=_cb_pick_project_folder,
                 args=("Оберіть робочу папку",)
+            )
+
+        col_on3, col_on4 = st.columns([3, 1])
+        with col_on3:
+            st.text_input(
+                "📥 Шлях до папки з вхідними документами (для створення шаблонів):",
+                placeholder="Вкажіть шлях до папки з оригіналами документів...",
+                key="txt_auto_folder",
+                on_change=save_persistent_state
+            )
+        with col_on4:
+            st.write(" ")
+            st.write(" ")
+            st.button(
+                "📥 Обрати папку",
+                key="btn_onboard_input",
+                use_container_width=True,
+                on_click=_cb_pick_folder,
+                args=("txt_auto_folder", "Оберіть папку з вхідними документами")
             )
         st.markdown('</div>', unsafe_allow_html=True)
         return
@@ -588,8 +607,6 @@ def render_workspace():
             
             if "Повний автопілот" in mode:
                 st.subheader("✈️ Режим 1: Повний автопілот")
-                if not st.session_state.get("txt_auto_folder"):
-                    st.session_state["txt_auto_folder"] = folder_path
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.text_input(
