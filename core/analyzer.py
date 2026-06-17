@@ -40,6 +40,24 @@ def find_all_vars_in_slot(strings, diff_map, v_idx, char_to_props=None):
                 equal_str = "".join(tok0[i1:i2])
                 if len(equal_str) <= 3 and not equal_str.strip():
                     for k in range(i1, i2): is_var[k] = True
+
+    # Pass 2: Bridge short gaps between True values
+    i = 0
+    while i < len(tok0):
+        if not is_var[i]:
+            start_false = i
+            while i < len(tok0) and not is_var[i]:
+                i += 1
+            end_false = i
+            
+            if start_false > 0 and end_false < len(tok0):
+                gap_str = "".join(tok0[start_false:end_false])
+                if len(gap_str) <= 4:
+                    for k in range(start_false, end_false):
+                        is_var[k] = True
+        else:
+            i += 1
+            
     var_ranges = []
     i = 0
     while i < len(tok0):
@@ -200,35 +218,6 @@ def process_paragraph_list(blocks_list_per_file, diff_map, v_idx_list, all_data)
             valid_blocks = [comp_blocks[i] for i in comp_indices if i < len(comp_blocks)]
             p_list.append(valid_blocks if valid_blocks else None)
             
-        chunk_lists = [get_combined_chunks(p_items) if p_items else [] for p_items in p_list]
-        can_compare_chunks = all(len(cl) == len(chunk_lists[0]) for cl in chunk_lists) and chunk_lists[0]
-
-        if can_compare_chunks:
-            p0 = p_list[0][0]
-            p0.clear()
-            # Clear other base blocks that got mapped to the same index to avoid duplication
-            for extra_p in p_list[0][1:]: extra_p.clear()
-            for c_idx in range(len(chunk_lists[0])):
-                chunk_texts = [cl[c_idx][0] for cl in chunk_lists]
-                chunk_props = chunk_lists[0][c_idx][1]
-
-                if len(set(chunk_texts)) == 1:
-                    run = p0.add_run(chunk_texts[0])
-                    apply_run_props(run, chunk_props)
-                    continue
-
-                t_str, var_rs, vals_f = find_all_vars_in_slot(chunk_texts, diff_map, v_idx_list)
-                if var_rs:
-                    for idx in range(len(var_rs)):
-                        v_name = get_var_name([v[idx] for v in vals_f], diff_map, v_idx_list)
-                        t_str = t_str.replace(f"{{{{VAR_PLACEHOLDER_{idx}}}}}", f"{{{{{v_name}}}}}")
-                        for f_idx in range(num_files):
-                            all_data[f_idx][v_name] = vals_f[f_idx][idx]
-                
-                run = p0.add_run(t_str)
-                apply_run_props(run, chunk_props)
-            continue
-
         all_texts = ["\n".join(x.text for x in p_items) if p_items else "" for p_items in p_list]
         if len(set(all_texts)) == 1: continue
 
@@ -248,61 +237,51 @@ def process_paragraph_list(blocks_list_per_file, diff_map, v_idx_list, all_data)
 
         tok0 = tokenize(all_texts[0])
         tok_char_idx = []
-        curr_idx = 0
-        for tok in tok0:
-            tok_char_idx.append(curr_idx)
-            curr_idx += len(tok)
-        tok_char_idx.append(curr_idx)
-
-        new_char_props = []
-        last_idx = 0
-
-        for idx, (v_start, v_end) in enumerate(var_rs):
-            v_name = get_var_name([v[idx] for v in vals_f], diff_map, v_idx_list)
-            for f_idx in range(num_files):
-                all_data[f_idx][v_name] = vals_f[f_idx][idx]
-
-            start_char = tok_char_idx[last_idx]
-            end_char = tok_char_idx[v_start]
-            for i in range(start_char, end_char):
-                if i < len(char_to_props):
-                    new_char_props.append((all_texts[0][i], char_to_props[i]))
-
-            placeholder = f"{{{{{v_name}}}}}"
-            var_start_char = tok_char_idx[v_start]
-            
-            if var_start_char < len(char_to_props):
-                p_props = char_to_props[var_start_char]
-            else:
-                p_props = char_to_props[-1] if char_to_props else None
-
-            for ch in placeholder:
-                new_char_props.append((ch, p_props))
-
-            last_idx = v_end
-
-        start_char = tok_char_idx[last_idx]
-        for i in range(start_char, len(all_texts[0])):
-            if i < len(char_to_props):
-                new_char_props.append((all_texts[0][i], char_to_props[i]))
-
-        new_fragments = []
-        if new_char_props:
-            cur_text = new_char_props[0][0]
-            cur_props = new_char_props[0][1]
-            for ch, props in new_char_props[1:]:
-                if props == cur_props:
-                    cur_text += ch
-                else:
-                    new_fragments.append((cur_text, cur_props))
-                    cur_text = ch
-                    cur_props = props
-            new_fragments.append((cur_text, cur_props))
+        cur_len = 0
+        for t in tok0:
+            tok_char_idx.append(cur_len)
+            cur_len += len(t)
 
         p0.clear()
-        for text, props in new_fragments:
-            run = p0.add_run(text)
-            apply_run_props(run, props)
+        
+        var_map = {}
+        if var_rs:
+            for idx, (vs, ve) in enumerate(var_rs):
+                v_name = get_var_name([v[idx] for v in vals_f], diff_map, v_idx_list)
+                for f_idx in range(num_files):
+                    all_data[f_idx][v_name] = vals_f[f_idx][idx]
+                var_map[vs] = (ve, v_name)
+                
+        i = 0
+        while i < len(tok0):
+            if i in var_map:
+                ve, v_name = var_map[i]
+                run = p0.add_run(f"{{{{{v_name}}}}}")
+                start_char = tok_char_idx[i]
+                apply_run_props(run, char_to_props[start_char] if char_to_props else None)
+                i = ve
+            else:
+                token_text = tok0[i]
+                start_char = tok_char_idx[i]
+                cur_text = ""
+                cur_props = char_to_props[start_char] if start_char < len(char_to_props) else None
+                
+                for c_idx, char in enumerate(token_text):
+                    props = char_to_props[start_char + c_idx] if (start_char + c_idx) < len(char_to_props) else None
+                    if props == cur_props:
+                        cur_text += char
+                    else:
+                        run = p0.add_run(cur_text)
+                        apply_run_props(run, cur_props)
+                        cur_text = char
+                        cur_props = props
+                
+                if cur_text:
+                    run = p0.add_run(cur_text)
+                    apply_run_props(run, cur_props)
+                    
+                i += 1
+
 
 def optimize_variables(all_data, diff_map, v_idx_list, template_doc=None, template_wb=None):
     if not all_data or not all_data[0]: return
@@ -333,6 +312,13 @@ def optimize_variables(all_data, diff_map, v_idx_list, template_doc=None, templa
                     idx = val_big.find(val_small)
                     if idx == -1:
                         is_substring = False; break
+                    
+                    end_idx = idx + len(val_small)
+                    if idx > 0 and val_big[idx-1].isalnum():
+                        is_substring = False; break
+                    if end_idx < len(val_big) and val_big[end_idx].isalnum():
+                        is_substring = False; break
+                        
                     if common_idx is None: common_idx = idx
                     elif common_idx != idx:
                         is_substring = False; break
