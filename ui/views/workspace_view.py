@@ -388,38 +388,26 @@ def render_workspace():
             )
 
         st.markdown('<div class="card" style="padding: 2.5rem; text-align: center;">', unsafe_allow_html=True)
-        st.info("👋 Вітаємо у TemplateMachine! Для початку роботи оберіть робочу папку.")
+        st.info("👋 Вітаємо у TemplateMachine!")
         st.markdown("""
         <div style="text-align: left; margin-top: 1.5rem; margin-bottom: 2rem; padding: 1.5rem; background-color: rgba(49, 130, 206, 0.05); border-left: 4px solid #3182ce; border-radius: 4px;">
-            <h4 style="margin-top: 0; color: #3182ce;">📂 Що таке робоча папка проекту та для чого вона потрібна?</h4>
-            <p style="margin-bottom: 0.8rem; font-size: 0.95rem;">
-                <b>Робоча папка (Workspace)</b> — це головний каталог вашого проекту, де розміщуються вихідні документи, шаблони та файли налаштувань.
-            </p>
-            <ul style="margin-bottom: 0; padding-left: 1.5rem; font-size: 0.9rem; line-height: 1.5;">
-                <li><b>Побудова файлової структури:</b> Система сканує цю папку для відображення інтерактивного дерева файлів у боковому меню ліворуч.</li>
-                <li><b>Пошук конфігів та шаблонів:</b> Додаток автоматично знаходить усі наявні файли конфігурацій (наприклад, <code>config_Auto.xlsx</code>) та шаблони в межах обраної папки.</li>
-                <li><b>Відносне збереження результатів:</b> Усі відносні шляхи до шаблонів та згенерованих документів (параметр <code>rel_dir</code>) вираховуються відносно цієї папки. Це дозволяє переносити проект на будь-який інший комп'ютер без втрати зв'язків.</li>
-            </ul>
+            <h4 style="margin-top: 0; color: #3182ce;">🚀 Як почати роботу?</h4>
+            <ol style="margin-bottom: 0; padding-left: 1.5rem; font-size: 0.95rem; line-height: 1.6;">
+                <li>Натисніть кнопку <b>"Почати роботу"</b> нижче.</li>
+                <li>За допомогою дерева файлів зліва оберіть потрібні документи для аналізу.</li>
+                <li>Створіть шаблони та налаштуйте конфігурацію за допомогою зручного інтерфейсу.</li>
+                <li>Згенеруйте нові документи на основі ваших налаштувань.</li>
+            </ol>
         </div>
         """, unsafe_allow_html=True)
-        col_on1, col_on2 = st.columns([3, 1])
-        with col_on1:
-            st.text_input(
-                "📁 Шлях до робочої папки проекту:",
-                placeholder="Вкажіть шлях до папки (наприклад, example)...",
-                key="pm_folder_path",
-                on_change=save_persistent_state
-            )
-        with col_on2:
-            st.write(" ")
-            st.write(" ")
-            st.button(
-                "📁 Обрати папку",
-                key="btn_onboard_folder",
-                use_container_width=True,
-                on_click=_cb_pick_project_folder,
-                args=("Оберіть робочу папку",)
-            )
+        
+        if st.button("🚀 Почати роботу", use_container_width=True, type="primary"):
+            st.session_state["pm_folder_path"] = os.getcwd()
+            st.session_state["active_selection_type"] = "folder"
+            st.session_state["selected_folder_path"] = os.getcwd()
+            save_persistent_state()
+            st.rerun()
+            
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
@@ -689,11 +677,12 @@ def render_workspace():
                         st.error("Вкажіть дійсну папку!")
                     else:
                         args = [f_path]
+                        out_dir = st.session_state.get("analysis_output_dir")
+                        if out_dir:
+                            args.append(out_dir)
                         if st.session_state.get("chk_ignore_single"):
                             args.append("--ignore-single")
-                        ret_code, _ = run_subprocess_and_stream(args)
-                        if ret_code == 0 and st.session_state.get("analysis_output_dir"):
-                            move_autopilot_outputs(st.session_state["analysis_output_dir"])
+                        run_subprocess_and_stream(args)
                         st.rerun()
             elif "Пакетний аналіз" in mode:
                 if st.button("🚀 Запустити аналіз", key="btn_run_batch", type="primary", use_container_width=True):

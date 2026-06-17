@@ -1152,7 +1152,7 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
     
     results = []
     nodup_results = []
-    out_dir = os.path.abspath(output_dir) if output_dir else os.getcwd()
+    out_dir = os.path.abspath(output_dir) if output_dir else os.path.abspath(folder)
     os.makedirs(out_dir, exist_ok=True)
     import shutil
     
