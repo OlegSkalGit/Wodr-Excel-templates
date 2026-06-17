@@ -1,8 +1,9 @@
 .BAK/
-__pycache__/
-example/
 .venv/
+__pycache__/
+BAK/
+example/
+setup/
 *.pyc
 .last_state.json
 *.log
-setup/
