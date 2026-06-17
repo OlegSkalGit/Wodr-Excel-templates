@@ -59,6 +59,16 @@ def find_all_vars_in_slot(strings, diff_map, v_idx, char_to_props=None):
             i += 1
             
     var_ranges = []
+    def extract_key_formatting(prop_xml):
+        if not prop_xml: return ""
+        keys = []
+        for tag in ['w:b', 'w:i', 'w:u', 'w:strike', 'w:sz', 'w:color', 'w:highlight', 'w:vertAlign']:
+            m = re.search(r'<' + tag + r'(?: [^>]*?)?/>', prop_xml)
+            if m: keys.append(m.group(0))
+            m_cs = re.search(r'<' + tag + r'Cs(?: [^>]*?)?/>', prop_xml)
+            if m_cs: keys.append(m_cs.group(0))
+        return "".join(keys)
+
     i = 0
     while i < len(tok0):
         if is_var[i]:
@@ -66,12 +76,15 @@ def find_all_vars_in_slot(strings, diff_map, v_idx, char_to_props=None):
             i += 1
             if char_to_props is not None:
                 start_char = tok_char_idx[start]
+                start_fmt = extract_key_formatting(char_to_props[start_char])
                 while i < len(tok0) and is_var[i]:
                     curr_char = tok_char_idx[i]
                     next_char = tok_char_idx[i+1] if i+1 < len(tok_char_idx) else len(char_to_props)
                     slice_props = char_to_props[curr_char:next_char]
-                    if slice_props and len(set([char_to_props[start_char]] + slice_props)) > 1:
-                        break
+                    if slice_props:
+                        curr_fmts = {extract_key_formatting(p) for p in slice_props}
+                        if len(curr_fmts) > 1 or list(curr_fmts)[0] != start_fmt:
+                            break
                     i += 1
             else:
                 while i < len(tok0) and is_var[i]: i += 1
