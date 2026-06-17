@@ -876,12 +876,8 @@ def normalize_sheet_numeric_cells(ws):
 def get_structure_key(path, ext):
     try:
         if ext == '.docx':
-            doc = Document(path)
-            if doc.tables:
-                table_shapes = tuple((len(t.rows), len(t.columns)) for t in doc.tables)
-                return ("word", "with_tables", len(doc.tables), table_shapes)
-            else:
-                return ("word", "no_tables", len(doc.paragraphs) // 5)
+            # Дозволяємо порівнювати всі Word-документи в межах поточного сканування
+            return ("word", "all_documents")
         elif ext == '.xlsx':
             wb = openpyxl.load_workbook(path, read_only=True)
             sheet_info = []
@@ -1133,10 +1129,8 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
                 if sh_details:
                     criteria_parts.append(f"  Аркуш {idx_sh+1} ({wb_sheetname_by_idx(files[0], idx_sh)}): {', '.join(sh_details)}")
         elif ftype == "word":
-            if key[1] == "with_tables":
-                criteria_parts.append(f"Тип: Word, з таблицями ({key[2]} шт.), розміри таблиць: {key[3]}")
-            else:
-                criteria_parts.append(f"Тип: Word, без таблиць (орієнтовно {key[2]*5} абзаців)")
+            folder_name = key[1]
+            criteria_parts.append(f"Тип: Word, папка: {folder_name}")
                 
         criteria_str = "\n".join(criteria_parts)
         print(f"\n[Сигнатура {idx+1}] ({len(files)} файлів):\n{criteria_str}")
@@ -1147,7 +1141,7 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
     
     results = []
     nodup_results = []
-    out_dir = os.path.abspath(output_dir) if output_dir else os.getcwd()
+    out_dir = os.path.abspath(output_dir) if output_dir else os.path.abspath(folder)
     os.makedirs(out_dir, exist_ok=True)
     import shutil
     
