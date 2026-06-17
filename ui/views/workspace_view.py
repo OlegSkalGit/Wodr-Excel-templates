@@ -358,8 +358,8 @@ def render_workspace():
 
     pm_path = st.session_state.get("pm_folder_path", "")
 
-    # Onboarding view if user hasn't explicitly started
-    if not st.session_state.get("onboarding_completed", False):
+    # Onboarding view if no project directory is loaded
+    if not pm_path or not os.path.exists(pm_path):
         # Render the sidebar for onboarding to avoid the empty white panel and expose useful controls
         with st.sidebar:
             col_help, col_theme = st.columns([3, 1], vertical_alignment="center")
@@ -405,31 +405,12 @@ def render_workspace():
         col_on1, col_on2 = st.columns([3, 1])
         with col_on1:
             st.text_input(
-                "📥 Шлях до папки з вхідними документами (для створення шаблонів і конфігів):",
-                placeholder="Вкажіть шлях до папки з оригіналами документів...",
-                key="txt_auto_folder",
-                on_change=save_persistent_state
-            )
-        with col_on2:
-            st.write(" ")
-            st.write(" ")
-            st.button(
-                "📥 Обрати папку",
-                key="btn_onboard_input",
-                use_container_width=True,
-                on_click=_cb_pick_folder,
-                args=("txt_auto_folder", "Оберіть папку з вхідними документами")
-            )
-
-        col_on3, col_on4 = st.columns([3, 1])
-        with col_on3:
-            st.text_input(
-                "📁 Шлях до папки з конфігами (тут зберігатимуться конфіги і шаблони):",
-                placeholder="Вкажіть шлях до папки...",
+                "📁 Шлях до робочої папки проекту:",
+                placeholder="Вкажіть шлях до папки (наприклад, example)...",
                 key="pm_folder_path",
                 on_change=save_persistent_state
             )
-        with col_on4:
+        with col_on2:
             st.write(" ")
             st.write(" ")
             st.button(
@@ -439,33 +420,6 @@ def render_workspace():
                 on_click=_cb_pick_project_folder,
                 args=("Оберіть робочу папку",)
             )
-
-        col_on5, col_on6 = st.columns([3, 1])
-        with col_on5:
-            st.text_input(
-                "📤 Шлях до папки з документами (тут зберігатимуться документи, згенеровані з конфігів):",
-                placeholder="Вкажіть шлях для збереження результатів...",
-                key="txt_output_docs_folder",
-                on_change=save_persistent_state
-            )
-        with col_on6:
-            st.write(" ")
-            st.write(" ")
-            st.button(
-                "📤 Обрати папку",
-                key="btn_onboard_output",
-                use_container_width=True,
-                on_click=_cb_pick_folder,
-                args=("txt_output_docs_folder", "Оберіть папку для збереження документів")
-            )
-            
-        st.write("*(Кожне з полів не є обов'язковим для заповнення)*")
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 Почати роботу", use_container_width=True, type="primary"):
-            st.session_state["onboarding_completed"] = True
-            st.rerun()
-
         st.markdown('</div>', unsafe_allow_html=True)
         return
 
@@ -634,6 +588,8 @@ def render_workspace():
             
             if "Повний автопілот" in mode:
                 st.subheader("✈️ Режим 1: Повний автопілот")
+                if not st.session_state.get("txt_auto_folder"):
+                    st.session_state["txt_auto_folder"] = folder_path
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.text_input(
