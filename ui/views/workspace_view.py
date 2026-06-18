@@ -359,7 +359,7 @@ def render_workspace():
     pm_path = st.session_state.get("pm_folder_path", "")
 
     # Onboarding view if no project directory is loaded
-    if not pm_path or not os.path.exists(pm_path):
+    if not pm_path:
         # Render the sidebar for onboarding to avoid the empty white panel and expose useful controls
         with st.sidebar:
             col_help, col_theme = st.columns([3, 1], vertical_alignment="center")
@@ -551,7 +551,7 @@ def render_workspace():
 
     # --- MODE A: FOLDER SELECTED (ANALYSIS VIEWS) ---
     if sel_type == "folder":
-        folder_path = st.session_state.get("selected_folder_path", pm_path)
+        folder_path = st.session_state.get("selected_folder_path") or pm_path
         
         with col_main:
             st.header("🔍 Режими аналізу та розпізнавання шаблонів")
@@ -574,10 +574,13 @@ def render_workspace():
             
             st.markdown("---")
             
+            needs_rerun = False
+            
             if "Повний автопілот" in mode:
                 st.subheader("✈️ Режим 1: Повний автопілот")
-                if not st.session_state.get("txt_auto_folder"):
+                if not st.session_state.get("txt_auto_folder") and folder_path:
                     st.session_state["txt_auto_folder"] = folder_path
+                    needs_rerun = True
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.text_input(
@@ -606,18 +609,24 @@ def render_workspace():
                             
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    if not st.session_state.get("txt_batch_folder"):
+                    if not st.session_state.get("txt_batch_folder") and folder_path:
                         st.session_state["txt_batch_folder"] = folder_path
+                        needs_rerun = True
                     st.text_input(
                         "Шлях до папки порівняння:",
                         key="txt_batch_folder",
                         on_change=save_persistent_state
                     )
+                    
                 with col2:
                     st.write(" ")
                     st.write(" ")
-                    st.button("📁 Обрати", key="btn_batch_folder_pick", on_click=_cb_pick_folder, args=("txt_batch_folder", "Оберіть папку для пакетного аналізу"))
-                            
+                    st.button("📁 Обрати", key="btn_batch_folder_pick", on_click=_cb_pick_folder, args=("txt_batch_folder", "Оберіть папку для порівняння"))
+                    
+            if needs_rerun:
+                save_persistent_state()
+                st.rerun()
+                
             elif "Попарне порівняння" in mode:
                 st.subheader("⚖️ Режим 3: Попарне порівняння")
                 col1, col2 = st.columns([3, 1])

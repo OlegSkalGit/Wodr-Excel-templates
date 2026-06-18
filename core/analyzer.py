@@ -180,15 +180,8 @@ def align_blocks(base_items, comp_items, get_text_fn):
             for k in range(i2 - i1): alignment[i1 + k] = [j1 + k]
         elif tag == 'replace':
             limit = min(i2 - i1, j2 - j1)
-            for k in range(limit - 1):
+            for k in range(limit):
                 alignment[i1 + k] = [j1 + k]
-            if i2 - i1 < j2 - j1:
-                alignment[i1 + limit - 1] = list(range(j1 + limit - 1, j2))
-            elif i2 - i1 > j2 - j1:
-                for k in range(limit - 1, i2 - i1):
-                    alignment[i1 + k] = [j1 + limit - 1]
-            else:
-                alignment[i1 + limit - 1] = [j1 + limit - 1]
     return alignment
 
 def process_paragraph_list(blocks_list_per_file, diff_map, v_idx_list, all_data):
@@ -398,13 +391,20 @@ def optimize_variables(all_data, diff_map, v_idx_list, template_doc=None, templa
                     if val1 == "None": val1 = ""
                     if val2 == "None": val2 = ""
                     
-                    if val1 == val2 and val1 != "":
+                    if val1 and val2 and val1 == val2:
                         match_count += 1
-                    elif val1 != "" and val2 != "":
-                        if val1 in val2 or val2 in val1:
+                    else:
+                        if val1 == "" or val2 == "":
                             pass
-                        else:
-                            conflict_count += 1
+                        elif val1 != "" and val2 != "":
+                            # Strict check for numerics to avoid merging '5' into '15'
+                            is_numeric = lambda s: bool(re.match(r'^\d+$', s.strip()))
+                            if is_numeric(val1) or is_numeric(val2):
+                                conflict_count += 1
+                            elif val1 in val2 or val2 in val1:
+                                pass
+                            else:
+                                conflict_count += 1
                             
                 if match_count >= 2 and conflict_count == 0:
                     score = match_count
@@ -463,6 +463,8 @@ def optimize_variables(all_data, diff_map, v_idx_list, template_doc=None, templa
                                 if old_str in run.text: run.text = run.text.replace(old_str, new_str)
         if template_wb:
             for ws in template_wb.worksheets:
+                if old_str in ws.title:
+                    ws.title = ws.title.replace(old_str, new_str)
                 for row in ws.iter_rows():
                     for cell in row:
                         if isinstance(cell.value, str) and old_str in cell.value:
