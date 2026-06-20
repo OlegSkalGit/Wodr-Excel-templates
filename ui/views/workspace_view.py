@@ -123,7 +123,7 @@ def move_autopilot_outputs(dest_dir):
     try:
         dest_dir = os.path.abspath(dest_dir)
         os.makedirs(dest_dir, exist_ok=True)
-        for filename in ["config_Auto.xlsx", "Auto_Run_All.bat", "config__NODublicate_.xlsx"]:
+        for filename in ["config_Auto.xlsx", "Auto_Run_All.bat"]:
             src = os.path.join(os.getcwd(), filename)
             if os.path.exists(src):
                 shutil.move(src, os.path.join(dest_dir, filename))
@@ -149,8 +149,6 @@ def move_autopilot_outputs(dest_dir):
         toast_msg = f"✅ Результати аналізу перенесено в: {dest_dir}"
         if os.path.exists(os.path.join(dest_dir, "config_Auto.xlsx")):
             toast_msg += f" (переміщено {moved_count} шаблонів)"
-        if os.path.exists(os.path.join(dest_dir, "config__NODublicate_.xlsx")):
-            toast_msg += " (створено config__NODublicate_.xlsx)"
         st.toast(toast_msg, icon="📁")
     except Exception as e:
         st.error(f"Помилка при перенесенні файлів результатів: {e}")

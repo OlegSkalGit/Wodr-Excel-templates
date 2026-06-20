@@ -1152,7 +1152,6 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
     print("\n" + "="*60 + "\n")
     
     results = []
-    nodup_results = []
     out_dir = os.path.abspath(output_dir) if output_dir else os.path.abspath(folder)
     os.makedirs(out_dir, exist_ok=True)
     import shutil
@@ -1164,13 +1163,12 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
                 continue
             else:
                 f = files[0]
-                print(f"Група з файлом {os.path.basename(f)} має лише один файл. Додаємо до списку без дублікатів (_NODublicate_).")
+                print(f"Група з файлом {os.path.basename(f)} має лише один файл. Копіюємо до _NODublicate_ із збереженням структури.")
                 try:
-                    nodup_dir = os.path.join(out_dir, "_NODublicate_")
-                    os.makedirs(nodup_dir, exist_ok=True)
-                    shutil.copy2(f, nodup_dir)
-                    dest_template_abs = os.path.abspath(os.path.join(nodup_dir, os.path.basename(f)))
-                    nodup_results.append((files, dest_template_abs, [{}], 0))
+                    rel_file = os.path.relpath(os.path.abspath(f), os.path.abspath(folder))
+                    dest_file_path = os.path.join(out_dir, "_NODublicate_", rel_file)
+                    os.makedirs(os.path.dirname(dest_file_path), exist_ok=True)
+                    shutil.copy2(f, dest_file_path)
                 except Exception as e:
                     print(f"Помилка при копіюванні {os.path.basename(f)}: {e}")
                 continue
@@ -1196,10 +1194,6 @@ def run_full_auto(folder, ignore_single=False, output_dir=None):
             print(f"  - Помилка: {e}")
             traceback.print_exc()
             
-    if nodup_results:
-        m_p_nodup = save_master_config(os.path.join(out_dir, "config__NODublicate_.xlsx"), nodup_results, relative_to_folder=folder)
-        print(f"Створено окремий конфіг для одиничних файлів: {m_p_nodup}")
-        
     if not results:
         print("Не вдалося створити жодного шаблону в config_Auto.xlsx (або змінні відсутні).")
         return
